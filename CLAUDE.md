@@ -41,4 +41,40 @@ When `REQUIRE_APPROVAL=true`:
   view count, license) and its planned clips (start/end timestamps,
   duration, score), and notify the user. Do **not** run `--approve`
   yourself — wait for the user's reply.
-  - User approves → run `python 
+  - User approves → run `python main.py --approve <run_id>` (moves clips
+    from `clips/pending/<run_id>/` into `clips/` and marks the run
+    `"approved"`).
+  - User rejects → run `python main.py --reject <run_id>` (deletes the
+    pending clips and marks the run `"rejected"`).
+  - `python main.py --list-pending` lists all runs currently awaiting
+    approval (useful if a previous run's notification was missed).
+
+When `REQUIRE_APPROVAL=false`, clips go straight to `clips/` and
+`approval_status` is `"not_required"` — no human step needed.
+
+The user has asked to keep `REQUIRE_APPROVAL=true` for the first several
+scheduled runs to validate video/clip selection quality, then may switch it
+to `false` once satisfied.
+
+## Success criteria
+
+- Exit code 0
+- `status` in latest manifest is `"completed"` or `"partial"`
+- `clips_produced > 0` (may be 0 if no CC-BY videos found that day — normal)
+- If `REQUIRE_APPROVAL=true` and `clips_produced > 0`, `approval_status` will
+  be `"pending"` until a human approves/rejects — this is expected, not a
+  failure.
+
+## On failure
+
+- **Quota exhausted**: API has 10,000 units/day. Next run will pick up where things stand.
+- **No CC videos found**: Normal and expected. Logged as `skipped_license` in manifest.
+- **FFmpeg error**: Clip is skipped, others continue. Check `logs/` for details.
+- **Download error**: Video skipped, pipeline continues.
+
+## Environment requirements
+
+- Python 3.13 at `C:\Python313\python.exe`
+- `.env` file with `YOUTUBE_API_KEY` set
+- FFmpeg 8.1.1 installed via winget
+- All Python packages in `requirements.txt` installed

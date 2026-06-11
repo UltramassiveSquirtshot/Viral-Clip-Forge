@@ -292,4 +292,32 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
         result.approval_status = "not_required"
 
     manifest["require_approval"] = config.require_approval
-    manifest["approval_s
+    manifest["approval_status"] = result.approval_status
+    manifest["pending_dir"] = str(clip_output_dir) if result.approval_status == "pending" else None
+
+    record_run_finish(
+        conn, run_id, result.status, result.api_units_used, result.niches_processed, result.approval_status
+    )
+
+    manifest_dir = config.state_db_path.parent / "manifests" / started_at[:16].replace(":", "-")
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    result.manifest_path = manifest_path
+
+    conn.close()
+
+    log.info(
+        f"=== Run {run_id} {result.status} | "
+        f"clips={result.clips_produced} api_units={result.api_units_used} "
+        f"errors={len(result.errors)} approval={result.approval_status} ==="
+    )
+    log.info(f"Manifest: {manifest_path}")
+    if result.approval_status == "pending":
+        log.info(
+            f"Run {run_id} awaiting human approval. Clips staged in: {clip_output_dir}\n"
+            f"  Approve: python main.py --approve {run_id}\n"
+            f"  Reject:  python main.py --reject {run_id}"
+        )
+
+    return result

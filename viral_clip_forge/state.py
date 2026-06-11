@@ -133,4 +133,59 @@ def record_run_finish(
     conn.commit()
 
 
-def set_approval_status(conn: sqlite3.Conn
+def set_approval_status(conn: sqlite3.Connection, run_id: str, approval_status: str) -> None:
+    conn.execute(
+        "UPDATE run_log SET approval_status=? WHERE run_id=?",
+        (approval_status, run_id),
+    )
+    conn.commit()
+
+
+def get_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM run_log WHERE run_id=?", (run_id,)).fetchone()
+
+
+def get_pending_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM run_log WHERE approval_status='pending' ORDER BY started_at"
+    ).fetchall()
+
+
+def update_clip_path(conn: sqlite3.Connection, clip_id: str, new_output_path: str) -> None:
+    conn.execute(
+        "UPDATE produced_clips SET output_path=? WHERE clip_id=?",
+        (new_output_path, clip_id),
+    )
+    conn.commit()
+
+
+def delete_clips_for_run(conn: sqlite3.Connection, video_ids: list[str]) -> None:
+    if not video_ids:
+        return
+    placeholders = ",".join("?" * len(video_ids))
+    conn.execute(
+        f"DELETE FROM produced_clips WHERE video_id IN ({placeholders})",
+        video_ids,
+    )
+    conn.commit()
+
+
+def get_today_api_units(conn: sqlite3.Connection) -> int:
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(api_units_used), 0) FROM run_log WHERE started_at LIKE ?",
+        (f"{today}%",),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def update_run_api_units(conn: sqlite3.Connection, run_id: str, units: int) -> None:
+    conn.execute(
+        "UPDATE run_log SET api_units_used = api_units_used + ? WHERE run_id = ?",
+        (units, run_id),
+    )
+    conn.commit()
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()

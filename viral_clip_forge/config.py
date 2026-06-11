@@ -95,4 +95,6 @@ def load_config() -> AppConfig:
         audio_peak_percentile=int(os.getenv("AUDIO_PEAK_PERCENTILE", "85")),
         min_views=int(os.getenv("MIN_VIEWS", "50000")),
         max_video_duration=int(os.getenv("MAX_VIDEO_DURATION", "1800")),
-    
+        require_approval=os.getenv("REQUIRE_APPROVAL", "true").strip().lower() not in ("false", "0", "no", ""),
+        niches=_DEFAULT_NICHES,
+    )
