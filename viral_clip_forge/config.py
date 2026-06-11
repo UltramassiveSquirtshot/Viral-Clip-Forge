@@ -35,6 +35,8 @@ class AppConfig:
     min_views: int = 50_000
     max_video_duration: int = 1800
     require_approval: bool = True
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
     niches: dict[str, NicheConfig] = field(default_factory=dict)
 
 
@@ -96,5 +98,7 @@ def load_config() -> AppConfig:
         min_views=int(os.getenv("MIN_VIEWS", "50000")),
         max_video_duration=int(os.getenv("MAX_VIDEO_DURATION", "1800")),
         require_approval=os.getenv("REQUIRE_APPROVAL", "true").strip().lower() not in ("false", "0", "no", ""),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         niches=_DEFAULT_NICHES,
     )

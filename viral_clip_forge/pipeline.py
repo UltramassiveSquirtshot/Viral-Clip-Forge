@@ -22,6 +22,7 @@ from .state import (
     record_run_start,
     update_run_api_units,
 )
+from .notifier import notify_run
 from .utils import ensure_dirs, generate_run_id, get_logger, setup_logging
 
 log = get_logger()
@@ -313,6 +314,9 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
         f"errors={len(result.errors)} approval={result.approval_status} ==="
     )
     log.info(f"Manifest: {manifest_path}")
+
+    notify_run(config.telegram_bot_token, config.telegram_chat_id, result)
+
     if result.approval_status == "pending":
         log.info(
             f"Run {run_id} awaiting human approval. Clips staged in: {clip_output_dir}\n"
