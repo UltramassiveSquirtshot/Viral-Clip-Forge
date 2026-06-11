@@ -1,0 +1,6 @@
+google-api-python-client>=2.154.0
+yt-dlp>=2025.1.1
+scrapetube>=2.5.1
+python-dotenv>=1.1.0
+scenedetect[opencv]>=0.6.5
+numpy>=1.26.0
