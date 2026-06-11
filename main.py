@@ -4,6 +4,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# On Windows, Avast (and similar AV) intercept HTTPS with their own CA cert.
+# pip-system-certs patches the SSL stack to trust the Windows certificate store,
+# which already includes the AV's intercepting CA, fixing verification for all libs.
+try:
+    import pip_system_certs.wrapt_requests  # noqa: F401
+except ImportError:
+    pass
+
 from viral_clip_forge.approval import ApprovalError, approve_run, list_pending_runs, reject_run
 from viral_clip_forge.config import load_config, ConfigurationError
 from viral_clip_forge.pipeline import run_pipeline
