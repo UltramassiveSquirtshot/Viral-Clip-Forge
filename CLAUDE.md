@@ -6,6 +6,12 @@
 cd "C:\Users\Utente\Desktop\PROGETTI\Viral Clip Forge" && C:\Python313\python.exe main.py
 ```
 
+> **Important**: this pipeline runs on the **local Windows machine** — it requires
+> the local Python 3.13 install, local FFmpeg, local `.env`, and local disk for
+> downloads and clips. It cannot run in a remote/cloud sandbox. Schedule it using
+> the Claude Code **desktop app** task scheduler (which executes commands on the
+> local machine), not a cloud-based Cowork agent.
+
 ## Schedule
 
 Cron: `0 7,19 * * *` — runs at 07:00 and 19:00 UTC (08:00 and 20:00 Rome time)
