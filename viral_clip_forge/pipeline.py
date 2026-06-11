@@ -41,6 +41,8 @@ class PipelineResult:
     clips_produced: int
     manifest_path: Path | None
     errors: list[str]
+    approval_status: str = "not_required"
+    pending_dir: Path | None = None
 
 
 def run_pipeline(config: AppConfig) -> PipelineResult:
@@ -62,6 +64,13 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
     seen_ids = get_processed_ids(conn)
     today_units = get_today_api_units(conn)
     run_units: list[int] = []
+
+    # When approval is required, clips are cut into a per-run "pending" folder
+    # and only moved into the final clips dir once a human approves the run
+    # (see approval.py / `main.py --approve <run_id>`).
+    clip_output_dir = (
+        config.output_dir / "pending" / run_id if config.require_approval else config.output_dir
+    )
 
     result = PipelineResult(
         run_id=run_id,
@@ -196,7 +205,7 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
                 cut_results = cut_all_clips(
                     source_path=source_path,
                     candidates=clip_windows,
-                    output_dir=config.output_dir,
+                    output_dir=clip_output_dir,
                     video_id=video.video_id,
                     ffmpeg_bin=config.ffmpeg_bin,
                     ffprobe_bin=config.ffprobe_bin,
@@ -276,21 +285,11 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
     manifest["status"] = result.status
     manifest["errors"] = result.errors
 
-    record_run_finish(conn, run_id, result.status, result.api_units_used, result.niches_processed)
+    if config.require_approval and result.clips_produced > 0:
+        result.approval_status = "pending"
+        result.pending_dir = clip_output_dir
+    else:
+        result.approval_status = "not_required"
 
-    manifest_dir = config.state_db_path.parent / "manifests" / started_at[:16].replace(":", "-")
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = manifest_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    result.manifest_path = manifest_path
-
-    conn.close()
-
-    log.info(
-        f"=== Run {run_id} {result.status} | "
-        f"clips={result.clips_produced} api_units={result.api_units_used} "
-        f"errors={len(result.errors)} ==="
-    )
-    log.info(f"Manifest: {manifest_path}")
-
-    return result
+    manifest["require_approval"] = config.require_approval
+    manifest["approval_s

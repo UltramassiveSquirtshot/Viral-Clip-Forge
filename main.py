@@ -1,38 +1,33 @@
+import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from viral_clip_forge.approval import ApprovalError, approve_run, list_pending_runs, reject_run
 from viral_clip_forge.config import load_config, ConfigurationError
 from viral_clip_forge.pipeline import run_pipeline
 
 
-def main() -> int:
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Viral Clip Forge")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--approve", metavar="RUN_ID", help="Approve a pending run and move its clips into clips/")
+    group.add_argument("--reject", metavar="RUN_ID", help="Reject a pending run and discard its clips")
+    group.add_argument("--list-pending", action="store_true", help="List runs awaiting approval")
+    return parser.parse_args(argv)
+
+
+def _load_config_or_exit() -> "AppConfig":  # noqa: F821
     try:
-        config = load_config()
+        return load_config()
     except ConfigurationError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         print("Create a .env file with YOUTUBE_API_KEY set. See .env.example.", file=sys.stderr)
-        return 1
-
-    result = run_pipeline(config)
-
-    print(f"\nRun {result.run_id}: {result.status}")
-    print(f"  Niches: {', '.join(result.niches_processed)}")
-    print(f"  Videos found: {result.videos_found}")
-    print(f"  Videos processed: {result.videos_processed}")
-    print(f"  Videos skipped (license): {result.videos_skipped_license}")
-    print(f"  Clips produced: {result.clips_produced}")
-    print(f"  API units used: {result.api_units_used}")
-    if result.manifest_path:
-        print(f"  Manifest: {result.manifest_path}")
-    if result.errors:
-        print(f"  Errors ({len(result.errors)}):")
-        for e in result.errors:
-            print(f"    - {e}")
-
-    return 0 if result.status in ("completed", "partial") else 1
+        sys.exit(1)
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def cmd_list_pending(config) -> int:
+    pending = list_pending_runs(config)
+    if not pending:
+     

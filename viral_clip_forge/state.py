@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS run_log (
     finished_at         TEXT,
     status              TEXT NOT NULL DEFAULT 'running',
     api_units_used      INTEGER NOT NULL DEFAULT 0,
-    niches_processed    TEXT NOT NULL DEFAULT '[]'
+    niches_processed    TEXT NOT NULL DEFAULT '[]',
+    approval_status     TEXT NOT NULL DEFAULT 'not_required'
 );
 """
 
@@ -45,8 +46,18 @@ def get_db_connection(db_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the initial schema, for existing databases."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(run_log)").fetchall()}
+    if "approval_status" not in cols:
+        conn.execute(
+            "ALTER TABLE run_log ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'not_required'"
+        )
 
 
 def is_video_processed(conn: sqlite3.Connection, video_id: str) -> bool:
@@ -111,32 +122,15 @@ def record_run_finish(
     status: str,
     api_units_used: int,
     niches_processed: list[str],
+    approval_status: str = "not_required",
 ) -> None:
     conn.execute(
         """UPDATE run_log
-           SET finished_at=?, status=?, api_units_used=?, niches_processed=?
+           SET finished_at=?, status=?, api_units_used=?, niches_processed=?, approval_status=?
            WHERE run_id=?""",
-        (_now(), status, api_units_used, json.dumps(niches_processed), run_id),
+        (_now(), status, api_units_used, json.dumps(niches_processed), approval_status, run_id),
     )
     conn.commit()
 
 
-def get_today_api_units(conn: sqlite3.Connection) -> int:
-    today = date.today().isoformat()
-    row = conn.execute(
-        "SELECT COALESCE(SUM(api_units_used), 0) FROM run_log WHERE started_at LIKE ?",
-        (f"{today}%",),
-    ).fetchone()
-    return int(row[0]) if row else 0
-
-
-def update_run_api_units(conn: sqlite3.Connection, run_id: str, units: int) -> None:
-    conn.execute(
-        "UPDATE run_log SET api_units_used = api_units_used + ? WHERE run_id = ?",
-        (units, run_id),
-    )
-    conn.commit()
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def set_approval_status(conn: sqlite3.Conn
