@@ -1,4 +1,11 @@
-# Viral Clip Forge — Cowork Agent Instructions
+# Viral Clip Forge — Pipeline Instructions
+
+## Execution Environment
+
+This pipeline runs **locally on the Windows machine**, scheduled via the
+Claude Code desktop app's local task scheduler. It cannot run in a cloud or
+remote sandbox — it requires local Python 3.13, local FFmpeg, a local `.env`
+file, and local disk for downloads and clips.
 
 ## Run Command
 
@@ -8,6 +15,7 @@ cd "C:\Users\Utente\Desktop\PROGETTI\Viral Clip Forge" && C:\Python313\python.ex
 
 ## Schedule
 
+Registered in the Claude Code **desktop app** local scheduler.
 Cron: `0 7,19 * * *` — runs at 07:00 and 19:00 UTC (08:00 and 20:00 Rome time)
 
 ## What this pipeline does
@@ -35,26 +43,20 @@ When `REQUIRE_APPROVAL=true`:
 
 - Selected clips are cut into `clips/pending/<run_id>/` instead of `clips/`.
 - The manifest gets `"approval_status": "pending"` and `"pending_dir": "<path>"`.
-- Nothing is published to `clips/` until a human approves the run.
-- **Cowork agent**: after a run finishes with `approval_status == "pending"`,
-  read the manifest, summarize each selected video (title, channel, URL,
-  view count, license) and its planned clips (start/end timestamps,
-  duration, score), and notify the user. Do **not** run `--approve`
-  yourself — wait for the user's reply.
-  - User approves → run `python main.py --approve <run_id>` (moves clips
-    from `clips/pending/<run_id>/` into `clips/` and marks the run
-    `"approved"`).
-  - User rejects → run `python main.py --reject <run_id>` (deletes the
-    pending clips and marks the run `"rejected"`).
-  - `python main.py --list-pending` lists all runs currently awaiting
-    approval (useful if a previous run's notification was missed).
+- Nothing is published to `clips/` until manually approved.
+
+After a run finishes, check the manifest in `data/manifests/` to review what
+was selected (title, channel, URL, view count, license, clip timestamps). Then:
+
+- Approve → `C:\Python313\python.exe main.py --approve <run_id>`
+- Reject  → `C:\Python313\python.exe main.py --reject <run_id>`
+- List pending → `C:\Python313\python.exe main.py --list-pending`
 
 When `REQUIRE_APPROVAL=false`, clips go straight to `clips/` and
-`approval_status` is `"not_required"` — no human step needed.
+`approval_status` is `"not_required"` — no manual step needed.
 
-The user has asked to keep `REQUIRE_APPROVAL=true` for the first several
-scheduled runs to validate video/clip selection quality, then may switch it
-to `false` once satisfied.
+The plan is to keep `REQUIRE_APPROVAL=true` for the first several runs to
+validate video/clip selection quality, then switch to `false` once satisfied.
 
 ## Success criteria
 
@@ -62,8 +64,7 @@ to `false` once satisfied.
 - `status` in latest manifest is `"completed"` or `"partial"`
 - `clips_produced > 0` (may be 0 if no CC-BY videos found that day — normal)
 - If `REQUIRE_APPROVAL=true` and `clips_produced > 0`, `approval_status` will
-  be `"pending"` until a human approves/rejects — this is expected, not a
-  failure.
+  be `"pending"` until approved/rejected — this is expected, not a failure.
 
 ## On failure
 
@@ -75,6 +76,6 @@ to `false` once satisfied.
 ## Environment requirements
 
 - Python 3.13 at `C:\Python313\python.exe`
-- `.env` file with `YOUTUBE_API_KEY` set
-- FFmpeg 8.1.1 installed via winget
-- All Python packages in `requirements.txt` installed
+- `.env` file with `YOUTUBE_API_KEY` set (copy `.env.example` to get started)
+- FFmpeg 8.1.1 installed via winget (`winget install Gyan.FFmpeg`)
+- Python packages: `pip install -r requirements.txt`
