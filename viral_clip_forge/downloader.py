@@ -38,7 +38,12 @@ def download_video(
 
     ydl_opts = {
         "format": (
-            f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]"
+            # Prefer H.264+AAC so lossless cut works and clips play everywhere without extra codecs.
+            # AV1/VP9 are excluded because they require re-encoding on cut, which is slower and
+            # loses the original quality advantage of lossless stream copy.
+            f"bestvideo[vcodec^=avc1][height<={max_height}][ext=mp4]+bestaudio[ext=m4a]"
+            f"/bestvideo[vcodec^=h264][height<={max_height}][ext=mp4]+bestaudio[ext=m4a]"
+            f"/bestvideo[height<={max_height}][ext=mp4][vcodec!=av01][vcodec!=vp9]+bestaudio[ext=m4a]"
             f"/best[height<={max_height}][ext=mp4]/best"
         ),
         "outtmpl": outtmpl,
