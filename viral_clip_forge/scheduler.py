@@ -46,6 +46,70 @@ _SLOT_TIMES = ["08:00", "13:00", "19:30"]
 _MAX_PER_DAY = 3
 
 
+def sync_state_from_youtube(config, state_path: Path, now: datetime | None = None) -> dict[str, int]:
+    """
+    Query YouTube API for videos with status=scheduled and rebuild slots_used from their
+    publishAt timestamps. This ensures the local state is always consistent with YouTube,
+    even if schedule_state.json was lost or a manual upload was made via YouTube Studio.
+    Returns the updated slots_used dict (also persisted to state_path).
+    """
+    if now is None:
+        now = datetime.now(tz=ROME)
+
+    try:
+        from googleapiclient.discovery import build
+        from viral_clip_forge.youtube_uploader import _get_credentials
+        creds = _get_credentials(config)
+        youtube = build("youtube", "v3", credentials=creds)
+    except Exception:
+        return {}
+
+    slots_used: dict[str, int] = {}
+    page_token = None
+
+    try:
+        while True:
+            kwargs: dict = {
+                "part": "status",
+                "mine": True,
+                "maxResults": 50,
+                "type": "video",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+
+            resp = youtube.search().list(**kwargs).execute()
+
+            video_ids = [item["id"]["videoId"] for item in resp.get("items", []) if "videoId" in item.get("id", {})]
+            if video_ids:
+                details = youtube.videos().list(
+                    part="status",
+                    id=",".join(video_ids),
+                ).execute()
+                for item in details.get("items", []):
+                    status = item.get("status", {})
+                    if status.get("privacyStatus") == "private" and status.get("publishAt"):
+                        publish_at = datetime.fromisoformat(
+                            status["publishAt"].replace("Z", "+00:00")
+                        ).astimezone(ROME)
+                        if publish_at > now:
+                            day_key = _day_key(publish_at)
+                            slots_used[day_key] = slots_used.get(day_key, 0) + 1
+
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Could not sync schedule from YouTube: %s", exc)
+        return {}
+
+    state = _load_state(state_path)
+    state["slots_used"] = slots_used
+    _save_state(state_path, state)
+    return slots_used
+
+
 def next_upload_slots(n_clips: int, state_path: Path, now: datetime | None = None) -> list[datetime]:
     """
     Reserve n_clips upload slots and return their scheduled datetimes.
@@ -75,8 +139,8 @@ def next_upload_slots(n_clips: int, state_path: Path, now: datetime | None = Non
                 if len(result) >= n_clips:
                     break
                 slot_dt = _parse_slot_time(candidate, slot_str)
-                # Must be at least 30 minutes in the future
-                if slot_dt <= now + timedelta(minutes=30):
+                # Must be at least 10 minutes in the future (YouTube needs time to process)
+                if slot_dt <= now + timedelta(minutes=10):
                     continue
                 if used >= _MAX_PER_DAY:
                     break

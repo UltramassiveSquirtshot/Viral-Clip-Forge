@@ -13,7 +13,7 @@ from .content_generator import generate_title, generate_description, generate_ta
 from .downloader import cleanup_stale_downloads, download_video
 from .filter import FilterResult, ScoredCandidate, run_filter_pipeline
 from .license_checker import LicenseStatus, check_video_license
-from .scheduler import next_upload_slots
+from .scheduler import next_upload_slots, sync_state_from_youtube
 from .scraper import scrape_niche
 from .state import (
     get_db_connection,
@@ -76,6 +76,13 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
     deleted = cleanup_stale_downloads(config.download_dir, max_age_hours=24)
     if deleted:
         log.info(f"Cleaned up {deleted} stale downloads")
+
+    # Sync scheduled-video state from YouTube so local slots_used always reflects reality
+    synced = sync_state_from_youtube(config, config.schedule_state_path)
+    if synced:
+        log.info("Schedule synced from YouTube: %s", synced)
+    else:
+        log.info("Schedule sync skipped (no YouTube token or no scheduled videos)")
 
     conn = get_db_connection(config.state_db_path)
     record_run_start(conn, run_id)
