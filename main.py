@@ -12,21 +12,21 @@ try:
 except ImportError:
     pass
 
-from viral_clip_forge.approval import ApprovalError, approve_run, list_pending_runs, reject_run
 from viral_clip_forge.config import load_config, ConfigurationError
 from viral_clip_forge.pipeline import run_pipeline
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Viral Clip Forge")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("--approve", metavar="RUN_ID", help="Approve a pending run and move its clips into clips/")
-    group.add_argument("--reject", metavar="RUN_ID", help="Reject a pending run and discard its clips")
-    group.add_argument("--list-pending", action="store_true", help="List runs awaiting approval")
+    parser.add_argument(
+        "--setup-youtube",
+        action="store_true",
+        help="Run OAuth consent flow to authenticate with YouTube and save token",
+    )
     return parser.parse_args(argv)
 
 
-def _load_config_or_exit() -> "AppConfig":  # noqa: F821
+def _load_config_or_exit():
     try:
         return load_config()
     except ConfigurationError as exc:
@@ -35,79 +35,103 @@ def _load_config_or_exit() -> "AppConfig":  # noqa: F821
         sys.exit(1)
 
 
-def cmd_list_pending(config) -> int:
-    pending = list_pending_runs(config)
-    if not pending:
-        print("No runs awaiting approval.")
+def cmd_setup_youtube(config) -> int:
+    from viral_clip_forge.youtube_uploader import run_oauth_flow
+    print("Opening browser for YouTube OAuth authentication...")
+    try:
+        run_oauth_flow(config)
+        print(f"Authentication successful. Token saved to {config.youtube_token_path}")
         return 0
-
-    for run in pending:
-        print(f"\nRun {run['run_id']} ({run['run_date']})")
-        print(f"  Manifest: {run['manifest_path']}")
-        for niche_name, videos in run["niches"].items():
-            print(f"  [{niche_name}]")
-            for video in videos:
-                print(f"    - {video['title']}  ({video['url']})")
-                print(f"      channel={video['channel']} views={video['view_count']} license={video['license']}")
-                for clip in video["clips"]:
-                    if not clip["cut_successful"]:
-                        continue
-                    print(
-                        f"        clip {clip['index']}: "
-                        f"{clip['start_sec']:.1f}s-{clip['end_sec']:.1f}s "
-                        f"({clip['duration_sec']:.1f}s, score={clip['combined_score']}) "
-                        f"-> {clip['output_path']}"
-                    )
-    print(f"\n{len(pending)} run(s) awaiting approval.")
-    print("Approve with: python main.py --approve <run_id>")
-    print("Reject with:  python main.py --reject <run_id>")
-    return 0
-
-
-def cmd_approve(config, run_id: str) -> int:
-    try:
-        result = approve_run(config, run_id)
-    except ApprovalError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Authentication failed: {exc}", file=sys.stderr)
         return 1
-    print(f"Run {result['run_id']} approved.")
-    print(f"Moved {len(result['moved_clips'])} clip(s) to {result['output_dir']}:")
-    for name in result["moved_clips"]:
-        print(f"  - {name}")
-    return 0
-
-
-def cmd_reject(config, run_id: str) -> int:
-    try:
-        result = reject_run(config, run_id)
-    except ApprovalError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    print(f"Run {result['run_id']} rejected. Pending clips discarded: {result['deleted_pending_dir']}")
-    return 0
 
 
 def cmd_run(config) -> int:
-    result = run_pipeline(config)
+    import os
 
-    print(f"\nRun {result.run_id}: {result.status}")
-    print(f"  Niches: {', '.join(result.niches_processed)}")
-    print(f"  Videos found: {result.videos_found}")
-    print(f"  Videos processed: {result.videos_processed}")
-    print(f"  Videos skipped (license): {result.videos_skipped_license}")
-    print(f"  Clips produced: {result.clips_produced}")
-    print(f"  API units used: {result.api_units_used}")
-    print(f"  Approval status: {result.approval_status}")
-    if result.approval_status == "pending":
-        print(f"  Pending clips dir: {result.pending_dir}")
-        print(f"  Approve with: python main.py --approve {result.run_id}")
-        print(f"  Reject with:  python main.py --reject {result.run_id}")
+    # Write PID lockfile so the Telegram listener can detect a running pipeline
+    lock_path = config.pipeline_lock_path
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()))
+
+    try:
+        result = run_pipeline(config)
+    finally:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    print(f"\n{'='*70}")
+    print(f"Run {result.run_id}  |  Status: {result.status.upper()}")
+    print(f"API units used: {result.api_units_used}  |  Clips produced: {result.clips_produced}")
+    uploads = getattr(result, "uploads_scheduled", 0)
+    if uploads:
+        print(f"Uploads scheduled on YouTube: {uploads}")
+    print(f"{'='*70}")
+
+    for ns in result.niche_summaries:
+        print(f"\nNiche: {ns['niche'].upper()}")
+        src = ns.get("sources", {})
+        print(
+            f"  Sources: cc_search={src.get('cc_search', 0)}  "
+            f"trending={src.get('trending', 0)}  "
+            f"scrapetube={src.get('scrapetube', 0)}"
+        )
+        fs = ns.get("filter_stats", {})
+        print(
+            f"  Filter:  {fs.get('before_dedup', '?')} raw -> "
+            f"{fs.get('after_dedup', '?')} dedup -> "
+            f"{fs.get('after_threshold', '?')} passed thresholds -> "
+            f"{ns['videos_selected']} selected"
+        )
+
+        candidates = ns.get("top_candidates", [])
+        if candidates:
+            print(f"  Candidates:")
+            print(f"  {'Title':<46} {'Views':>10}  {'Score':>6}  {'Source':>10}  Status")
+            print(f"  {'-'*46} {'-'*10}  {'-'*6}  {'-'*10}  {'-'*20}")
+            for c in candidates:
+                title = c["title"]
+                title_trunc = (title[:43] + "...") if len(title) > 46 else title
+                score_str = f"{c['score']:.4f}" if c["score"] is not None else "   N/A"
+                views_str = f"{c['views']:,}"
+                print(
+                    f"  {title_trunc:<46} {views_str:>10}  {score_str:>6}  "
+                    f"{c['source']:>10}  {c['status']}"
+                )
+        else:
+            print("  No candidates passed filtering.")
+
+    if result.clips_produced == 0:
+        print(f"\nNo clips produced. Diagnosis:")
+        for ns in result.niche_summaries:
+            src = ns.get("sources", {})
+            fs = ns.get("filter_stats", {})
+            cc_found = src.get("cc_search", 0)
+            after_threshold = fs.get("after_threshold", 0)
+            skipped = ns.get("videos_skipped", 0)
+            selected = ns.get("videos_selected", 0)
+            clipped = ns.get("videos_clipped", 0)
+            if cc_found == 0:
+                reason = "CC search returned 0 results — no CC-BY content found for these keywords"
+            elif after_threshold == 0:
+                reason = f"{cc_found} CC videos found but none passed view/duration thresholds"
+            elif skipped == selected and selected > 0:
+                reason = f"{selected} selected but all failed license check (API license mismatch)"
+            elif clipped == 0 and selected > 0:
+                reason = f"{selected} selected and licensed but download/cut failed"
+            else:
+                reason = "unknown — check logs"
+            print(f"  [{ns['niche']}] {reason}")
+
     if result.manifest_path:
-        print(f"  Manifest: {result.manifest_path}")
+        print(f"\nManifest: {result.manifest_path}")
     if result.errors:
-        print(f"  Errors ({len(result.errors)}):")
+        print(f"\nErrors ({len(result.errors)}):")
         for e in result.errors:
-            print(f"    - {e}")
+            print(f"  - {e}")
 
     return 0 if result.status in ("completed", "partial") else 1
 
@@ -116,12 +140,8 @@ def main() -> int:
     args = parse_args(sys.argv[1:])
     config = _load_config_or_exit()
 
-    if args.list_pending:
-        return cmd_list_pending(config)
-    if args.approve:
-        return cmd_approve(config, args.approve)
-    if args.reject:
-        return cmd_reject(config, args.reject)
+    if args.setup_youtube:
+        return cmd_setup_youtube(config)
 
     return cmd_run(config)
 

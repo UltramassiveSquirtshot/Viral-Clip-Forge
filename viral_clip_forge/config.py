@@ -14,6 +14,7 @@ class NicheConfig:
     name: str
     category_ids: list[str]
     search_keywords: list[str]
+    cc_search_keywords: list[str]
     trending_region: str
     max_results_per_source: int
 
@@ -32,11 +33,22 @@ class AppConfig:
     max_clip_duration: int = 90
     scene_threshold: float = 0.40
     audio_peak_percentile: int = 85
-    min_views: int = 50_000
+    min_views: int = 10_000
     max_video_duration: int = 1800
-    require_approval: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # YouTube upload
+    youtube_client_secret_path: Path = field(default_factory=lambda: _BASE / "data" / "youtube_client_secret.json")
+    youtube_token_path: Path = field(default_factory=lambda: _BASE / "data" / "youtube_token.json")
+    youtube_channel_id: str = ""
+    # Algorithm-aware scheduler
+    schedule_state_path: Path = field(default_factory=lambda: _BASE / "data" / "schedule_state.json")
+    max_uploads_per_day: int = 3
+    upload_days: list[str] = field(default_factory=lambda: ["Tuesday", "Wednesday", "Thursday", "Saturday"])
+    upload_slots_local: list[str] = field(default_factory=lambda: ["08:00", "13:00", "19:30"])
+    # Telegram listener
+    pipeline_lock_path: Path = field(default_factory=lambda: _BASE / "data" / "pipeline.lock")
+    telegram_listener_state_path: Path = field(default_factory=lambda: _BASE / "data" / "listener_state.json")
     niches: dict[str, NicheConfig] = field(default_factory=dict)
 
 
@@ -55,18 +67,12 @@ _DEFAULT_NICHES: dict[str, NicheConfig] = {
             "new gadget review",
             "startup funding",
         ],
-        trending_region="US",
-        max_results_per_source=25,
-    ),
-    "finance": NicheConfig(
-        name="finance",
-        category_ids=["25"],
-        search_keywords=[
-            "stock market crash",
-            "bitcoin price",
-            "investing strategy 2025",
-            "passive income",
-            "real estate market",
+        cc_search_keywords=[
+            "open source tutorial",
+            "linux explained",
+            "python programming tutorial",
+            "AI explained",
+            "technology review creative commons",
         ],
         trending_region="US",
         max_results_per_source=25,
@@ -95,10 +101,31 @@ def load_config() -> AppConfig:
         max_clip_duration=int(os.getenv("MAX_CLIP_DURATION", "90")),
         scene_threshold=float(os.getenv("SCENE_THRESHOLD", "0.40")),
         audio_peak_percentile=int(os.getenv("AUDIO_PEAK_PERCENTILE", "85")),
-        min_views=int(os.getenv("MIN_VIEWS", "50000")),
+        min_views=int(os.getenv("MIN_VIEWS", "10000")),
         max_video_duration=int(os.getenv("MAX_VIDEO_DURATION", "1800")),
-        require_approval=os.getenv("REQUIRE_APPROVAL", "true").strip().lower() not in ("false", "0", "no", ""),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        youtube_client_secret_path=Path(os.getenv(
+            "YOUTUBE_CLIENT_SECRET_PATH",
+            str(_BASE / "data" / "youtube_client_secret.json"),
+        )),
+        youtube_token_path=Path(os.getenv(
+            "YOUTUBE_TOKEN_PATH",
+            str(_BASE / "data" / "youtube_token.json"),
+        )),
+        youtube_channel_id=os.getenv("YOUTUBE_CHANNEL_ID", ""),
+        schedule_state_path=Path(os.getenv(
+            "SCHEDULE_STATE_PATH",
+            str(_BASE / "data" / "schedule_state.json"),
+        )),
+        max_uploads_per_day=int(os.getenv("MAX_UPLOADS_PER_DAY", "3")),
+        pipeline_lock_path=Path(os.getenv(
+            "PIPELINE_LOCK_PATH",
+            str(_BASE / "data" / "pipeline.lock"),
+        )),
+        telegram_listener_state_path=Path(os.getenv(
+            "TELEGRAM_LISTENER_STATE_PATH",
+            str(_BASE / "data" / "listener_state.json"),
+        )),
         niches=_DEFAULT_NICHES,
     )

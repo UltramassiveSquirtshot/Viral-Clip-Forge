@@ -213,6 +213,71 @@ def fetch_video_details(
     return candidates
 
 
+@retry(max_attempts=3, backoff_secs=2.0, exceptions=(Exception,))
+def fetch_cc_videos_by_topic(
+    api_key: str,
+    niche: NicheConfig,
+    today_units: int,
+    run_units: list[int],
+    max_keywords: int = 3,
+) -> list[VideoCandidate]:
+    """Search for CC-licensed videos using videoLicense=creativeCommon."""
+    remaining = _DAILY_QUOTA_LIMIT - today_units - sum(run_units)
+    if remaining < _SEARCH_COST + 10:
+        log.warning(f"[{niche.name}] Insufficient quota for CC search ({remaining} units left)")
+        return []
+
+    service = _build_service(api_key)
+    video_ids: list[str] = []
+
+    from datetime import timedelta
+    published_after = (
+        datetime.now(timezone.utc) - timedelta(days=30)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    keywords = niche.cc_search_keywords[:max_keywords] if niche.cc_search_keywords else niche.search_keywords[:max_keywords]
+
+    for keyword in keywords:
+        remaining = _DAILY_QUOTA_LIMIT - today_units - sum(run_units)
+        if remaining < _SEARCH_COST:
+            log.warning(f"[{niche.name}] Stopping CC search — quota too low ({remaining} units)")
+            break
+        try:
+            resp = (
+                service.search()
+                .list(
+                    part="id",
+                    q=keyword,
+                    type="video",
+                    order="viewCount",
+                    videoLicense="creativeCommon",
+                    publishedAfter=published_after,
+                    maxResults=25,
+                    regionCode=niche.trending_region,
+                )
+                .execute()
+            )
+            run_units.append(_SEARCH_COST)
+            ids = [
+                item["id"]["videoId"]
+                for item in resp.get("items", [])
+                if item.get("id", {}).get("videoId")
+            ]
+            video_ids.extend(ids)
+            log.info(f"[{niche.name}] CC search '{keyword}': {len(ids)} video IDs")
+        except HttpError as exc:
+            if "quotaExceeded" in str(exc):
+                raise QuotaExhaustedError(f"Quota exceeded during CC search: {exc}")
+            log.warning(f"[{niche.name}] CC search error for '{keyword}': {exc}")
+
+    if not video_ids:
+        return []
+
+    deduped = list(dict.fromkeys(video_ids))
+    log.info(f"[{niche.name}] CC search total unique IDs: {len(deduped)}")
+    return fetch_video_details(api_key, deduped, niche.name, run_units, source="cc_search")
+
+
 def fetch_with_scrapetube_fallback(
     niche: NicheConfig,
     limit: int = 20,
@@ -240,30 +305,39 @@ def scrape_niche(
     today_units: int,
     run_units: list[int],
 ) -> list[VideoCandidate]:
-    """Main entry point: try trending → search fallback → scrapetube fallback."""
+    """Primary: CC-licensed search. Fallback to trending only if CC yields < 5 results."""
     candidates: list[VideoCandidate] = []
 
+    # PRIMARY: CC-BY targeted search
     try:
-        candidates = fetch_trending_by_category(api_key, niche, today_units, run_units)
+        candidates = fetch_cc_videos_by_topic(api_key, niche, today_units, run_units)
+        log.info(f"[{niche.name}] CC search returned {len(candidates)} candidates")
     except QuotaExhaustedError as exc:
-        log.warning(f"[{niche.name}] Quota exhausted in trending: {exc}")
+        log.warning(f"[{niche.name}] Quota exhausted in CC search: {exc}")
     except Exception as exc:
-        log.error(f"[{niche.name}] Trending fetch failed: {exc}")
+        log.error(f"[{niche.name}] CC search failed: {exc}")
 
-    if len(candidates) < 10:
-        log.info(f"[{niche.name}] Only {len(candidates)} trending results — trying search fallback")
+    # FALLBACK: trending if CC yields too few results
+    if len(candidates) < 5:
+        log.info(
+            f"[{niche.name}] CC search yielded only {len(candidates)} results — "
+            f"supplementing with trending (note: trending videos will likely fail license check)"
+        )
         try:
-            search_candidates = fetch_search_fallback(api_key, niche, today_units, run_units)
-            candidates.extend(search_candidates)
-        except QuotaExhaustedError:
-            log.warning(f"[{niche.name}] Quota exhausted — falling back to scrapetube")
+            trending = fetch_trending_by_category(api_key, niche, today_units, run_units)
+            candidates.extend(trending)
+            log.info(f"[{niche.name}] Added {len(trending)} trending candidates")
+        except QuotaExhaustedError as exc:
+            log.warning(f"[{niche.name}] Quota exhausted in trending fallback: {exc}")
             ids = fetch_with_scrapetube_fallback(niche)
             if ids:
                 try:
                     sc = fetch_video_details(api_key, ids, niche.name, run_units, source="scrapetube")
                     candidates.extend(sc)
-                except Exception as exc:
-                    log.error(f"[{niche.name}] scrapetube details fetch failed: {exc}")
+                except Exception as exc2:
+                    log.error(f"[{niche.name}] scrapetube details fetch failed: {exc2}")
+        except Exception as exc:
+            log.error(f"[{niche.name}] Trending fallback failed: {exc}")
 
     log.info(f"[{niche.name}] Total candidates collected: {len(candidates)}")
     return candidates

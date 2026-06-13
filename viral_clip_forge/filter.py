@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from .scraper import VideoCandidate
@@ -17,6 +17,15 @@ class ScoredCandidate:
     engagement_ratio: float
     recency_bonus: float
     composite: float
+
+
+@dataclass
+class FilterResult:
+    selected: list[VideoCandidate]
+    scored_all: list[ScoredCandidate]
+    count_before_dedup: int
+    count_after_dedup: int
+    count_after_threshold: int
 
 
 def deduplicate(
@@ -89,20 +98,18 @@ def compute_engagement_score(candidate: VideoCandidate) -> ScoredCandidate:
     )
 
 
-def pick_top_n(
-    candidates: list[VideoCandidate],
-    n: int = 3,
-) -> list[VideoCandidate]:
-    scored = [compute_engagement_score(c) for c in candidates]
-    scored.sort(key=lambda s: s.composite, reverse=True)
-    top = scored[:n]
-    for s in top:
+def _log_scored_candidates(scored: list[ScoredCandidate], top_n: int) -> None:
+    log.info(f"  Ranking {len(scored)} candidates after thresholds:")
+    for rank, s in enumerate(scored, 1):
+        marker = "SEL" if rank <= top_n else "   "
         log.info(
-            f"  Selected [{s.candidate.niche}] {s.candidate.video_id} "
-            f"'{s.candidate.title[:60]}' "
-            f"views={s.candidate.view_count:,} composite={s.composite:.3f}"
+            f"  [{marker}] #{rank:2d} src={s.candidate.source:10s} "
+            f"id={s.candidate.video_id} "
+            f"'{s.candidate.title[:50]}' "
+            f"views={s.candidate.view_count:,} "
+            f"score={s.composite:.4f} "
+            f"(V={s.view_score:.3f} E={s.engagement_ratio:.4f} R={s.recency_bonus:.3f})"
         )
-    return [s.candidate for s in top]
 
 
 def run_filter_pipeline(
@@ -111,13 +118,23 @@ def run_filter_pipeline(
     min_views: int,
     max_duration_seconds: int,
     top_n: int = 3,
-) -> list[VideoCandidate]:
-    before = len(candidates)
+) -> FilterResult:
+    count_before = len(candidates)
     candidates = deduplicate(candidates, seen_ids)
-    after_dedup = len(candidates)
+    count_after_dedup = len(candidates)
     candidates = filter_by_thresholds(candidates, min_views, max_duration_seconds)
-    after_filter = len(candidates)
+    count_after_threshold = len(candidates)
     log.info(
-        f"Filter: {before} → {after_dedup} (dedup) → {after_filter} (thresholds)"
+        f"Filter: {count_before} -> {count_after_dedup} (dedup) -> "
+        f"{count_after_threshold} (thresholds)"
     )
-    return pick_top_n(candidates, top_n)
+    scored_all = [compute_engagement_score(c) for c in candidates]
+    scored_all.sort(key=lambda s: s.composite, reverse=True)
+    _log_scored_candidates(scored_all, top_n)
+    return FilterResult(
+        selected=[s.candidate for s in scored_all[:top_n]],
+        scored_all=scored_all,
+        count_before_dedup=count_before,
+        count_after_dedup=count_after_dedup,
+        count_after_threshold=count_after_threshold,
+    )
