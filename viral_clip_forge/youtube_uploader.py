@@ -62,6 +62,22 @@ def run_oauth_flow(config) -> None:
     log.info("YouTube token saved to %s", token_path)
 
 
+def _set_thumbnail(youtube, video_id: str, thumbnail_url: str) -> None:
+    """Download thumbnail from URL and upload it to the given YouTube video."""
+    import io
+    import urllib.request
+    from googleapiclient.http import MediaIoBaseUpload
+
+    try:
+        with urllib.request.urlopen(thumbnail_url, timeout=15) as resp:
+            data = resp.read()
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype="image/jpeg", resumable=False)
+        youtube.thumbnails().set(videoId=video_id, media_body=media).execute()
+        log.info("Thumbnail set for %s", video_id)
+    except Exception as exc:
+        log.warning("Could not set thumbnail for %s: %s", video_id, exc)
+
+
 def upload_clip(
     config,
     clip_path: Path,
@@ -70,6 +86,7 @@ def upload_clip(
     tags: list[str],
     publish_at: datetime,
     category_id: str = "28",
+    thumbnail_url: str = "",
 ) -> str:
     """
     Upload a clip to YouTube as a scheduled private video.
@@ -127,4 +144,8 @@ def upload_clip(
 
     video_id = response["id"]
     log.info("Uploaded %s → https://youtu.be/%s (scheduled %s)", clip_path.name, video_id, publish_at_str)
+
+    if thumbnail_url:
+        _set_thumbnail(youtube, video_id, thumbnail_url)
+
     return video_id

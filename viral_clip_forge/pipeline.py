@@ -49,11 +49,11 @@ class PipelineResult:
     niche_summaries: list[dict] = field(default_factory=list)
 
 
-def _try_upload_clip(config, clip_path, title, description, tags, publish_at) -> tuple[str | None, str]:
+def _try_upload_clip(config, clip_path, title, description, tags, publish_at, thumbnail_url: str = "") -> tuple[str | None, str]:
     """Returns (youtube_video_id, error_message). One or the other will be None."""
     try:
         from .youtube_uploader import upload_clip
-        yt_id = upload_clip(config, clip_path, title, description, tags, publish_at)
+        yt_id = upload_clip(config, clip_path, title, description, tags, publish_at, thumbnail_url=thumbnail_url)
         return yt_id, None
     except RuntimeError as exc:
         # Token not set up yet — skip upload silently
@@ -334,7 +334,8 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
                             tags = generate_tags(niche_name, video.title)
 
                             yt_id, err = _try_upload_clip(
-                                config, cut.output_path, title, description, tags, publish_at
+                                config, cut.output_path, title, description, tags, publish_at,
+                                thumbnail_url=video.thumbnail_url,
                             )
                             if yt_id:
                                 clip_entry["youtube_video_id"] = yt_id
