@@ -20,6 +20,7 @@ class DownloadResult:
     download_duration_secs: float
     success: bool
     error: str | None
+    subtitle_path: Path | None = None
 
 
 def download_video(
@@ -55,6 +56,15 @@ def download_video(
         "retries": 3,
         "fragment_retries": 3,
         "skip_unavailable_fragments": False,
+        # Download English subtitles (manual first, auto-generated fallback)
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["en"],
+        "subtitlesformat": "srt",
+        "postprocessors": [
+            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+            {"key": "FFmpegSubtitlesConvertor", "format": "srt"},
+        ],
     }
 
     start = time.time()
@@ -81,7 +91,15 @@ def download_video(
             size = output_path.stat().st_size if output_path.exists() else 0
             duration = float(info.get("duration") or 0)
 
-            log.info(f"[download] {video_id} → {output_path.name} ({size / 1_048_576:.1f} MB)")
+            # yt-dlp writes subtitles as <id>.en.srt
+            subtitle_path = output_dir / f"{video_id}.en.srt"
+            if not subtitle_path.exists():
+                subtitle_path = None
+                log.info(f"[download] {video_id} — no English subtitles available")
+            else:
+                log.info(f"[download] {video_id} — subtitles: {subtitle_path.name}")
+
+            log.info(f"[download] {video_id} -> {output_path.name} ({size / 1_048_576:.1f} MB)")
             return DownloadResult(
                 video_id=video_id,
                 output_path=output_path if output_path.exists() else None,
@@ -91,6 +109,7 @@ def download_video(
                 download_duration_secs=time.time() - start,
                 success=output_path.exists(),
                 error=None if output_path.exists() else "output file not found after download",
+                subtitle_path=subtitle_path,
             )
 
     except Exception as exc:

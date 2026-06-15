@@ -33,6 +33,10 @@ class AppConfig:
     max_clip_duration: int = 90
     scene_threshold: float = 0.40
     audio_peak_percentile: int = 85
+    preferred_clip_duration: int = 45
+    dead_zone_start_pct: float = 0.08
+    dead_zone_end_pct: float = 0.05
+    shorts_output: bool = True
     min_views: int = 10_000
     max_video_duration: int = 1800
     telegram_bot_token: str = ""
@@ -48,7 +52,20 @@ class AppConfig:
     upload_slots_local: list[str] = field(default_factory=lambda: ["08:00", "13:00", "19:30"])
     # Telegram listener
     pipeline_lock_path: Path = field(default_factory=lambda: _BASE / "data" / "pipeline.lock")
+    analytics_lock_path: Path = field(default_factory=lambda: _BASE / "data" / "analytics.lock")
     telegram_listener_state_path: Path = field(default_factory=lambda: _BASE / "data" / "listener_state.json")
+    # Analytics — separate OAuth client from YouTube pipeline
+    analytics_client_secret_path: Path = field(default_factory=lambda: _BASE / "data" / "analytics_client_secret.json")
+    analytics_token_path: Path = field(default_factory=lambda: _BASE / "data" / "analytics_token.json")
+    analytics_insights_path: Path = field(default_factory=lambda: _BASE / "data" / "analytics_insights.json")
+    analytics_reports_dir: Path = field(default_factory=lambda: _BASE / "data" / "analytics_reports")
+    gdrive_token_path: Path = field(default_factory=lambda: _BASE / "data" / "gdrive_token.json")
+    # Ranking Shorts (ranker.py) — own Drive token (full drive scope) + stock/music API keys
+    ranker_gdrive_token_path: Path = field(default_factory=lambda: _BASE / "data" / "ranker_gdrive_token.json")
+    ranker_client_secret_path: Path = field(default_factory=lambda: _BASE / "data" / "ranker_client_secret.json")
+    ranker_lock_path: Path = field(default_factory=lambda: _BASE / "data" / "ranker.lock")
+    pexels_api_key: str = ""
+    pixabay_api_key: str = ""
     niches: dict[str, NicheConfig] = field(default_factory=dict)
 
 
@@ -88,7 +105,7 @@ def load_config() -> AppConfig:
     ffmpeg_bin = Path(os.getenv("FFMPEG_BIN", "ffmpeg"))
     ffprobe_bin = Path(os.getenv("FFPROBE_BIN", "ffprobe"))
 
-    return AppConfig(
+    cfg = AppConfig(
         youtube_api_key=api_key,
         ffmpeg_bin=ffmpeg_bin,
         ffprobe_bin=ffprobe_bin,
@@ -101,6 +118,10 @@ def load_config() -> AppConfig:
         max_clip_duration=int(os.getenv("MAX_CLIP_DURATION", "90")),
         scene_threshold=float(os.getenv("SCENE_THRESHOLD", "0.40")),
         audio_peak_percentile=int(os.getenv("AUDIO_PEAK_PERCENTILE", "85")),
+        preferred_clip_duration=int(os.getenv("PREFERRED_CLIP_DURATION", "45")),
+        dead_zone_start_pct=float(os.getenv("DEAD_ZONE_START_PCT", "0.08")),
+        dead_zone_end_pct=float(os.getenv("DEAD_ZONE_END_PCT", "0.05")),
+        shorts_output=os.getenv("SHORTS_OUTPUT", "true").lower() != "false",
         min_views=int(os.getenv("MIN_VIEWS", "10000")),
         max_video_duration=int(os.getenv("MAX_VIDEO_DURATION", "1800")),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
@@ -127,5 +148,28 @@ def load_config() -> AppConfig:
             "TELEGRAM_LISTENER_STATE_PATH",
             str(_BASE / "data" / "listener_state.json"),
         )),
+        ranker_gdrive_token_path=Path(os.getenv(
+            "RANKER_GDRIVE_TOKEN_PATH",
+            str(_BASE / "data" / "ranker_gdrive_token.json"),
+        )),
+        ranker_client_secret_path=Path(os.getenv(
+            "RANKER_CLIENT_SECRET_PATH",
+            str(_BASE / "data" / "ranker_client_secret.json"),
+        )),
+        pexels_api_key=os.getenv("PEXELS_API_KEY", ""),
+        pixabay_api_key=os.getenv("PIXABAY_API_KEY", ""),
         niches=_DEFAULT_NICHES,
     )
+
+    # Pull the latest analytics_insights.json from Google Drive before applying.
+    # Uses ranker OAuth token (full drive scope); silently falls back to local file.
+    if cfg.ranker_gdrive_token_path.exists():
+        try:
+            from .analytics.uploader_gdrive import download_insights
+            download_insights(cfg.ranker_gdrive_token_path, cfg.ranker_client_secret_path, cfg.analytics_insights_path)
+        except Exception:
+            pass
+
+    from .analytics.applier import apply_analytics_insights
+    apply_analytics_insights(cfg, cfg.analytics_insights_path)
+    return cfg

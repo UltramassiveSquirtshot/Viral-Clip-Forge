@@ -63,6 +63,22 @@ def filter_by_thresholds(
     return result
 
 
+def filter_by_language(candidates: list[VideoCandidate]) -> list[VideoCandidate]:
+    """Keep only English videos. If both language fields are absent, allow through."""
+    result = []
+    rejected = 0
+    for c in candidates:
+        lang = c.default_audio_language or c.default_language
+        if lang and not lang.lower().startswith("en"):
+            log.info(f"[lang-filter] Rejected {c.video_id} '{c.title[:50]}' lang={lang}")
+            rejected += 1
+            continue
+        result.append(c)
+    if rejected:
+        log.info(f"[lang-filter] Rejected {rejected} non-English candidates")
+    return result
+
+
 def _days_since(published_at: str) -> float:
     try:
         dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
@@ -122,11 +138,13 @@ def run_filter_pipeline(
     count_before = len(candidates)
     candidates = deduplicate(candidates, seen_ids)
     count_after_dedup = len(candidates)
+    candidates = filter_by_language(candidates)
+    count_after_language = len(candidates)
     candidates = filter_by_thresholds(candidates, min_views, max_duration_seconds)
     count_after_threshold = len(candidates)
     log.info(
         f"Filter: {count_before} -> {count_after_dedup} (dedup) -> "
-        f"{count_after_threshold} (thresholds)"
+        f"{count_after_language} (language) -> {count_after_threshold} (thresholds)"
     )
     scored_all = [compute_engagement_score(c) for c in candidates]
     scored_all.sort(key=lambda s: s.composite, reverse=True)

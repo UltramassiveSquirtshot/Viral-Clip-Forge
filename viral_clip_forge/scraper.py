@@ -35,6 +35,8 @@ class VideoCandidate:
     thumbnail_url: str
     source: str
     niche: str
+    default_language: str = ""
+    default_audio_language: str = ""
 
 
 class QuotaExhaustedError(Exception):
@@ -79,6 +81,8 @@ def _parse_video_item(item: dict, niche: str, source: str) -> VideoCandidate | N
         thumbnail_url=thumb,
         source=source,
         niche=niche,
+        default_language=snippet.get("defaultLanguage", ""),
+        default_audio_language=snippet.get("defaultAudioLanguage", ""),
     )
 
 
@@ -160,6 +164,7 @@ def fetch_search_fallback(
                     publishedAfter=published_after,
                     maxResults=25,
                     regionCode=niche.trending_region,
+                    relevanceLanguage="en",
                 )
                 .execute()
             )
@@ -254,6 +259,7 @@ def fetch_cc_videos_by_topic(
                     publishedAfter=published_after,
                     maxResults=25,
                     regionCode=niche.trending_region,
+                    relevanceLanguage="en",
                 )
                 .execute()
             )
@@ -310,7 +316,7 @@ def scrape_niche(
 
     # PRIMARY: CC-BY targeted search
     try:
-        candidates = fetch_cc_videos_by_topic(api_key, niche, today_units, run_units)
+        candidates = fetch_cc_videos_by_topic(api_key, niche, today_units, run_units, max_keywords=5)
         log.info(f"[{niche.name}] CC search returned {len(candidates)} candidates")
     except QuotaExhaustedError as exc:
         log.warning(f"[{niche.name}] Quota exhausted in CC search: {exc}")

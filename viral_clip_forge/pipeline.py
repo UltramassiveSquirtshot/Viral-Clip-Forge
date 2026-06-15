@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .clip_analyzer import find_best_clip_windows, detect_scene_changes, detect_audio_peaks
+from .clip_analyzer import (
+    find_best_clip_windows,
+    detect_scene_changes,
+    detect_audio_loudness,
+    detect_speech_intervals,
+)
 from .clip_cutter import cut_all_clips
 from .config import AppConfig
 from .content_generator import generate_title, generate_description, generate_tags
@@ -259,15 +264,20 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
                 video_duration = dl_result.duration_seconds or float(video.duration_seconds)
 
                 scene_changes = detect_scene_changes(source_path, config.ffmpeg_bin, config.scene_threshold)
-                audio_peaks = detect_audio_peaks(source_path, config.ffprobe_bin, peak_percentile=config.audio_peak_percentile)
+                audio_loudness = detect_audio_loudness(source_path, config.ffmpeg_bin)
+                speech_intervals = detect_speech_intervals(source_path, config.ffmpeg_bin)
 
                 clip_windows = find_best_clip_windows(
                     scene_changes=scene_changes,
-                    audio_peaks=audio_peaks,
+                    audio_loudness=audio_loudness,
+                    speech_intervals=speech_intervals,
                     video_duration=video_duration,
                     min_duration=config.min_clip_duration,
                     max_duration=config.max_clip_duration,
                     max_clips=config.max_clips_per_video,
+                    preferred_duration=config.preferred_clip_duration,
+                    dead_zone_start_pct=config.dead_zone_start_pct,
+                    dead_zone_end_pct=config.dead_zone_end_pct,
                 )
 
                 cut_results = cut_all_clips(
@@ -278,6 +288,8 @@ def run_pipeline(config: AppConfig) -> PipelineResult:
                     ffmpeg_bin=config.ffmpeg_bin,
                     ffprobe_bin=config.ffprobe_bin,
                     max_clips=config.max_clips_per_video,
+                    shorts_output=config.shorts_output,
+                    subtitle_path=dl_result.subtitle_path,
                 )
 
                 # Collect successful clips and reserve upload slots for all at once
