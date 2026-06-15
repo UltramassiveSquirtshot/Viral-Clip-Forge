@@ -6,6 +6,7 @@ Long-polls Telegram getUpdates and handles:
   /run    — trigger pipeline if not already running
   /status — last run summary from latest manifest
   /next   — next scheduled YouTube publish times
+  /ranker — generate one Top-5 ranking Short from the next Drive-queued script
 
 Security: only responds to TELEGRAM_CHAT_ID from .env.
 """
@@ -26,6 +27,17 @@ log = logging.getLogger(__name__)
 _PIPELINE_CMD = [
     r"C:\Python313\python.exe",
     str(Path(__file__).parent.parent / "main.py"),
+]
+
+_ANALYZE_CMD = [
+    r"C:\Python313\python.exe",
+    str(Path(__file__).parent.parent / "analyze.py"),
+]
+
+_RANKER_CMD = [
+    r"C:\Python313\python.exe",
+    str(Path(__file__).parent.parent / "main.py"),
+    "--ranker",
 ]
 
 _PROJECT_ROOT = Path(__file__).parent.parent
@@ -76,12 +88,11 @@ def _save_state(state_path: Path, state: dict) -> None:
     os.replace(tmp, state_path)
 
 
-def _is_pipeline_running(lock_path: Path) -> bool:
+def _is_process_running(lock_path: Path) -> bool:
     if not lock_path.exists():
         return False
     try:
         pid = int(lock_path.read_text().strip())
-        # Check if process is alive (Windows)
         import ctypes
         handle = ctypes.windll.kernel32.OpenProcess(0x0400, False, pid)
         if handle == 0:
@@ -181,7 +192,7 @@ def run_listener(token: str, chat_id: str, state_path: Path, lock_path: Path) ->
                 continue
 
             if text in ("/run", "run"):
-                if _is_pipeline_running(lock_path):
+                if _is_process_running(lock_path):
                     _send(token, chat_id, "⚙️ Pipeline is already running.")
                 else:
                     _send(token, chat_id, "🚀 Starting pipeline...")
@@ -199,8 +210,36 @@ def run_listener(token: str, chat_id: str, state_path: Path, lock_path: Path) ->
             elif text in ("/next", "next"):
                 _send(token, chat_id, _next_scheduled())
 
+            elif text in ("/analyze", "analyze"):
+                analytics_lock = _PROJECT_ROOT / "data" / "analytics.lock"
+                if _is_process_running(analytics_lock):
+                    _send(token, chat_id, "⚙️ Analytics already in progress.")
+                else:
+                    _send(token, chat_id, "📊 Starting analytics run... you'll get a message when the report is ready.")
+                    try:
+                        subprocess.Popen(
+                            _ANALYZE_CMD,
+                            creationflags=subprocess.CREATE_NEW_CONSOLE,
+                        )
+                    except Exception as exc:
+                        _send(token, chat_id, f"❌ Failed to start analytics: {exc}")
+
+            elif text in ("/ranker", "ranker"):
+                ranker_lock = _PROJECT_ROOT / "data" / "ranker.lock"
+                if _is_process_running(ranker_lock) or _is_process_running(lock_path):
+                    _send(token, chat_id, "⚙️ A pipeline/ranker run is already in progress.")
+                else:
+                    _send(token, chat_id, "🏆 Starting ranking-Short run... you'll get a summary when it's done.")
+                    try:
+                        subprocess.Popen(
+                            _RANKER_CMD,
+                            creationflags=subprocess.CREATE_NEW_CONSOLE,
+                        )
+                    except Exception as exc:
+                        _send(token, chat_id, f"❌ Failed to start ranker: {exc}")
+
             elif text.startswith("/"):
-                _send(token, chat_id, "Commands: /run · /status · /next")
+                _send(token, chat_id, "Commands: /run · /status · /next · /analyze · /ranker")
 
 
 def main() -> None:

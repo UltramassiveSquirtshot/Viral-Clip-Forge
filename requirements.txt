@@ -8,3 +8,4 @@ scenedetect[opencv]>=0.6.5
 numpy>=1.26.0
 certifi>=2024.1.1
 pip-system-certs>=4.0
+requests>=2.31.0

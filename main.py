@@ -23,6 +23,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Run OAuth consent flow to authenticate with YouTube and save token",
     )
+    parser.add_argument(
+        "--ranker",
+        action="store_true",
+        help="Generate one Top-5 ranking Short from the next Drive-queued script",
+    )
+    parser.add_argument(
+        "--setup-gdrive",
+        action="store_true",
+        help="Run OAuth consent flow for the ranker's Google Drive access (reads ranker_scripts.json)",
+    )
     return parser.parse_args(argv)
 
 
@@ -45,6 +55,54 @@ def cmd_setup_youtube(config) -> int:
     except Exception as exc:
         print(f"Authentication failed: {exc}", file=sys.stderr)
         return 1
+
+
+def cmd_setup_gdrive(config) -> int:
+    from viral_clip_forge.ranker import gdrive
+    print("Opening browser for ranker Google Drive OAuth authentication...")
+    try:
+        gdrive.run_setup(config.ranker_gdrive_token_path, config.ranker_client_secret_path)
+        return 0
+    except Exception as exc:
+        print(f"Authentication failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_run_ranker(config) -> int:
+    import os
+
+    from viral_clip_forge.ranker.pipeline import run_ranker_pipeline
+
+    lock_path = config.ranker_lock_path
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()))
+
+    try:
+        result = run_ranker_pipeline(config)
+    finally:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    print(f"\n{'='*70}")
+    print(f"Ranker run {result.run_id}  |  Status: {result.status.upper()}")
+    print(f"Title: {result.title or '(none)'}  |  Segments: {result.n_segments}")
+    if result.output_path:
+        print(f"Output: {result.output_path}")
+    if result.youtube_url:
+        print(f"Scheduled: {result.youtube_url} @ {result.scheduled_publish_at}")
+    if result.manifest_path:
+        print(f"Manifest: {result.manifest_path}")
+    if result.errors:
+        print(f"Errors ({len(result.errors)}):")
+        for e in result.errors:
+            print(f"  - {e}")
+    print(f"{'='*70}")
+
+    if result.status == "empty":
+        return 0
+    return 0 if result.status in ("completed", "partial") else 1
 
 
 def cmd_run(config) -> int:
@@ -142,6 +200,12 @@ def main() -> int:
 
     if args.setup_youtube:
         return cmd_setup_youtube(config)
+
+    if args.setup_gdrive:
+        return cmd_setup_gdrive(config)
+
+    if args.ranker:
+        return cmd_run_ranker(config)
 
     return cmd_run(config)
 

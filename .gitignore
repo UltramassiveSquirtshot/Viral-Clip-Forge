@@ -4,8 +4,9 @@
 *.db
 downloads/
 logs/
-data/manifests/
+data/
 clips/
+compare_output.txt
 __pycache__/
 *.pyc
 *.pyo
