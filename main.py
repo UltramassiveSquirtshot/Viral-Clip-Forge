@@ -25,13 +25,41 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--ranker",
-        action="store_true",
-        help="Generate one Top-5 ranking Short from the next Drive-queued script",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="QUERY",
+        help="Ranker step 1: send 5 theme proposals via Telegram, or pass a custom query to skip theme selection",
     )
     parser.add_argument(
         "--setup-gdrive",
         action="store_true",
-        help="Run OAuth consent flow for the ranker's Google Drive access (reads ranker_scripts.json)",
+        help="Run OAuth consent flow for the ranker's Google Drive access",
+    )
+    parser.add_argument(
+        "--ranker-pick",
+        metavar="LETTER",
+        default=None,
+        help="Ranker step 3: download chosen video (a–e), analyse, propose timestamps. E.g. --ranker-pick b",
+    )
+    parser.add_argument(
+        "--ranker-confirm",
+        metavar="TIMESTAMPS",
+        default=None,
+        nargs="?",
+        const="",
+        help='Ranker step 4: cut at timestamps and compose. E.g. --ranker-confirm "0:32 1:45 3:10" or empty for suggested.',
+    )
+    parser.add_argument(
+        "--aishorts",
+        action="store_true",
+        help="AI-Shorts step 1: pop next script from Drive, synthesize voice, suggest image timestamps",
+    )
+    parser.add_argument(
+        "--aishorts-assemble",
+        metavar="RUN_ID",
+        default=None,
+        help="AI-Shorts step 3: download images, build captions, compose final video. E.g. --aishorts-assemble 20260625-120000-ab12",
     )
     return parser.parse_args(argv)
 
@@ -68,41 +96,21 @@ def cmd_setup_gdrive(config) -> int:
         return 1
 
 
-def cmd_run_ranker(config) -> int:
+def cmd_run_ranker(config, custom_query: str = "") -> int:
+    """Step 1: send 5 theme proposals via Telegram, or jump to search with a custom query."""
     import os
-
     from viral_clip_forge.ranker.pipeline import run_ranker_pipeline
 
     lock_path = config.ranker_lock_path
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(str(os.getpid()))
-
     try:
-        result = run_ranker_pipeline(config)
+        result = run_ranker_pipeline(config, custom_query=custom_query)
     finally:
-        try:
-            lock_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        lock_path.unlink(missing_ok=True)
 
-    print(f"\n{'='*70}")
-    print(f"Ranker run {result.run_id}  |  Status: {result.status.upper()}")
-    print(f"Title: {result.title or '(none)'}  |  Segments: {result.n_segments}")
-    if result.output_path:
-        print(f"Output: {result.output_path}")
-    if result.youtube_url:
-        print(f"Scheduled: {result.youtube_url} @ {result.scheduled_publish_at}")
-    if result.manifest_path:
-        print(f"Manifest: {result.manifest_path}")
-    if result.errors:
-        print(f"Errors ({len(result.errors)}):")
-        for e in result.errors:
-            print(f"  - {e}")
-    print(f"{'='*70}")
-
-    if result.status == "empty":
-        return 0
-    return 0 if result.status in ("completed", "partial") else 1
+    print(f"Ranker propose status: {result.status}")
+    return 0 if result.status in ("pending_theme", "pending_pick", "blocked") else 1
 
 
 def cmd_run(config) -> int:
@@ -194,6 +202,76 @@ def cmd_run(config) -> int:
     return 0 if result.status in ("completed", "partial") else 1
 
 
+def cmd_ranker_pick(config, letter: str) -> int:
+    """Step 2: download chosen video, cut 5 clips, compose, upload to Drive."""
+    import os
+    from viral_clip_forge.ranker.pipeline import run_ranker_pick
+
+    lock_path = config.ranker_lock_path
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()))
+    try:
+        status = run_ranker_pick(config, letter)
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+    print(f"Ranker pick status: {status}")
+    return 0 if status in ("pending_confirm", "error") else 1
+
+
+def cmd_ranker_confirm(config, timestamps_str: str) -> int:
+    """Step 4: cut at timestamps, compose, upload to Drive."""
+    import os
+    from viral_clip_forge.ranker.pipeline import run_ranker_confirm
+
+    lock_path = config.ranker_lock_path
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()))
+    try:
+        status = run_ranker_confirm(config, timestamps_str)
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+    print(f"Ranker confirm status: {status}")
+    return 0 if status in ("completed", "error") else 1
+
+
+def cmd_aishorts(config) -> int:
+    """AI-Shorts step 1: generate script & voice, suggest image timestamps."""
+    import os
+    from viral_clip_forge.aishorts.pipeline import run_aishorts_init
+    from viral_clip_forge.aishorts.config import build_aishorts_config
+
+    lock_path = build_aishorts_config(config).lock_path
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()))
+    try:
+        status = run_aishorts_init(config)
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+    print(f"AI-Shorts init status: {status}")
+    return 0 if status in ("pending_images", "no_scripts", "blocked") else 1
+
+
+def cmd_aishorts_assemble(config, run_id: str) -> int:
+    """AI-Shorts step 3: download images, compose final video, upload to Drive."""
+    import os
+    from viral_clip_forge.aishorts.pipeline import run_aishorts_assemble
+    from viral_clip_forge.aishorts.config import build_aishorts_config
+
+    lock_path = build_aishorts_config(config).lock_path
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()))
+    try:
+        status = run_aishorts_assemble(config, run_id)
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+    print(f"AI-Shorts assemble status: {status}")
+    return 0 if status in ("completed", "error") else 1
+
+
 def main() -> int:
     args = parse_args(sys.argv[1:])
     config = _load_config_or_exit()
@@ -204,8 +282,20 @@ def main() -> int:
     if args.setup_gdrive:
         return cmd_setup_gdrive(config)
 
-    if args.ranker:
-        return cmd_run_ranker(config)
+    if args.aishorts_assemble is not None:
+        return cmd_aishorts_assemble(config, args.aishorts_assemble)
+
+    if args.aishorts:
+        return cmd_aishorts(config)
+
+    if args.ranker_confirm is not None:
+        return cmd_ranker_confirm(config, args.ranker_confirm)
+
+    if args.ranker_pick is not None:
+        return cmd_ranker_pick(config, args.ranker_pick)
+
+    if args.ranker is not None:
+        return cmd_run_ranker(config, custom_query=args.ranker or "")
 
     return cmd_run(config)
 

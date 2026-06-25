@@ -1,0 +1,52 @@
+================================================================================
+AI SHORTS — SCRIPT GENERATION PROMPT
+================================================================================
+Upload this file to the "ViralClipForge" folder on Google Drive (reference only).
+The Cowork agent uses these instructions to produce `ai_shorts_scripts.json`.
+
+Paste the block below into any AI chat (Claude / ChatGPT / Gemini), or let the
+scheduled Cowork agent run it. The agent should:
+
+  1. Use WebSearch to find what is TRENDING TODAY in the target niche.
+  2. Find a recently viral short-form video in that niche and COPY ITS STRUCTURE
+     (hook → escalating beats → final twist/payoff) — replace the content with
+     our own facts/story.
+  3. Write SHORT narration: the whole voiceover must stay UNDER 60 SECONDS when
+     spoken (aim ~30–45s). Roughly 2.5 words/second → ~90–110 words total.
+  4. Write one cinematic Leonardo.ai image prompt per beat: VIVID, SATURATED,
+     HIGH CONTRAST, vertical 9:16, dramatic lighting (bright/punchy style).
+  5. Output ONE JSON object, append 3 entries/day to the `videos` array, and
+     upload/replace `ai_shorts_scripts.json` in the "ViralClipForge" Drive folder.
+
+Do NOT include timestamps — the pipeline computes them from the real TTS timing
+and tells the user which filename to give each Leonardo image.
+
+--------------------------------------------------------------------------------
+NICHE: <fill in, e.g. "space facts" / "tech mysteries" / "history secrets">
+--------------------------------------------------------------------------------
+
+Return EXACTLY this JSON shape (3 entries):
+
+{"videos": [
+  {
+    "theme": "short theme label",
+    "title": "ALL-CAPS PUNCHY TITLE (fits one banner line)",
+    "hook": "One-sentence opening line that stops the scroll.",
+    "beats": [
+      {"narration": "Beat 1 spoken line (one short sentence).",
+       "leonardo_prompt": "vivid saturated cinematic scene, high contrast, dramatic lighting, vertical 9:16, ultra detailed"},
+      {"narration": "Beat 2 ...", "leonardo_prompt": "..."},
+      {"narration": "Beat 3 ...", "leonardo_prompt": "..."},
+      {"narration": "Beat 4 ...", "leonardo_prompt": "..."},
+      {"narration": "Beat 5 (final twist/payoff).", "leonardo_prompt": "..."}
+    ]
+  }
+  /* + 2 more entries for the day */
+]}
+
+Rules:
+- 5–7 beats per video. Each narration = one short sentence.
+- Total spoken narration < 60s (count words, ~100 max).
+- Every leonardo_prompt ends with: "vertical 9:16, high contrast, vivid colors".
+- Valid JSON only (no comments in the real file). UTF-8.
+================================================================================

@@ -3,10 +3,17 @@ Always-on Telegram bot listener.
 
 Registered in Windows Task Scheduler to run at logon.
 Long-polls Telegram getUpdates and handles:
-  /run    — trigger pipeline if not already running
-  /status — last run summary from latest manifest
-  /next   — next scheduled YouTube publish times
-  /ranker — generate one Top-5 ranking Short from the next Drive-queued script
+  /run                   — trigger CC-BY clip pipeline if not already running
+  /status                — last run summary from latest manifest
+  /next                  — next scheduled YouTube publish times
+  /analyze               — trigger weekly analytics run
+  /ranker                — propose 5 hardcoded themes (step 1)
+  /pick <lettera>        — step 2: pick theme → search YouTube CC-BY, propose 5 videos
+                           step 3: pick video → download, analyse, propose timestamps
+  /confirm [timestamp]   — step 4: cut at timestamps, compose, upload Drive
+                           No args = use suggested; args = custom (e.g. "0:32 1:45 3:10")
+  /aishorts              — AI-Shorts step 1: pop script, synth voice, suggest image timestamps
+  /assemble <RUN_ID>     — AI-Shorts step 3: download images, compose final video
 
 Security: only responds to TELEGRAM_CHAT_ID from .env.
 """
@@ -161,6 +168,47 @@ def _next_scheduled() -> str:
     return "Next scheduled uploads:\n" + "\n".join(upcoming[:10])
 
 
+def _handle_ranker_confirm(token: str, chat_id: str, args: str) -> None:
+    """Handle /confirm [timestamps] — cut at timestamps, compose, upload to Drive."""
+    try:
+        subprocess.Popen(
+            _PIPELINE_CMD + ["--ranker-confirm", args],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+    except Exception as exc:
+        _send(token, chat_id, f"❌ Errore avvio confirm: {exc}")
+
+
+def _handle_ranker_pick(token: str, chat_id: str, letter: str) -> None:
+    """Handle /pick b — step 2/3 of the ranker flow."""
+    letter = letter.strip().lower()[:1]
+    if not letter or letter not in "abcde":
+        _send(token, chat_id, "⚠️ Uso: <code>/pick b</code>  (lettera a–e)")
+        return
+    try:
+        subprocess.Popen(
+            _PIPELINE_CMD + ["--ranker-pick", letter],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+    except Exception as exc:
+        _send(token, chat_id, f"❌ Errore avvio ranker pick: {exc}")
+
+
+def _handle_aishorts_assemble(token: str, chat_id: str, run_id: str) -> None:
+    """Handle /assemble <RUN_ID> — AI-Shorts step 3."""
+    run_id = run_id.strip()
+    if not run_id:
+        _send(token, chat_id, "⚠️ Uso: <code>/assemble RUN_ID</code> (vedi la web UI o il messaggio di /aishorts)")
+        return
+    try:
+        subprocess.Popen(
+            _PIPELINE_CMD + ["--aishorts-assemble", run_id],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+    except Exception as exc:
+        _send(token, chat_id, f"❌ Errore avvio assemble: {exc}")
+
+
 def run_listener(token: str, chat_id: str, state_path: Path, lock_path: Path) -> None:
     log.info("Telegram listener started. Polling for commands...")
     state = _load_state(state_path)
@@ -224,22 +272,73 @@ def run_listener(token: str, chat_id: str, state_path: Path, lock_path: Path) ->
                     except Exception as exc:
                         _send(token, chat_id, f"❌ Failed to start analytics: {exc}")
 
-            elif text in ("/ranker", "ranker"):
+            elif text.startswith("/ranker"):
                 ranker_lock = _PROJECT_ROOT / "data" / "ranker.lock"
                 if _is_process_running(ranker_lock) or _is_process_running(lock_path):
-                    _send(token, chat_id, "⚙️ A pipeline/ranker run is already in progress.")
+                    _send(token, chat_id, "⚙️ Ranker già in esecuzione.")
                 else:
-                    _send(token, chat_id, "🏆 Starting ranking-Short run... you'll get a summary when it's done.")
+                    # Extract optional custom query after "/ranker "
+                    raw_ranker = text[len("/ranker"):].lstrip("@")
+                    if raw_ranker and not raw_ranker[0].isspace():
+                        parts = raw_ranker.split()
+                        raw_ranker = " ".join(parts[1:]) if len(parts) > 1 else ""
+                    custom_query = raw_ranker.strip()
+                    cmd = _PIPELINE_CMD + ["--ranker"]
+                    if custom_query:
+                        cmd.append(custom_query)
+                    try:
+                        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    except Exception as exc:
+                        _send(token, chat_id, f"❌ Errore avvio ranker: {exc}")
+
+            elif text.startswith("/pick"):
+                # handles "/pick b", "/pick  b", "/pick@botname b"
+                raw = text[len("/pick"):].lstrip("@")
+                if raw and not raw[0].isspace():
+                    parts = raw.split()
+                    raw = " ".join(parts[1:]) if len(parts) > 1 else ""
+                letter_arg = raw.strip()
+                if not letter_arg:
+                    _send(token, chat_id, "⚠️ Uso: <code>/pick b</code>  (lettera a–e)")
+                else:
+                    _handle_ranker_pick(token, chat_id, letter_arg)
+
+            elif text.startswith("/confirm"):
+                # handles "/confirm", "/confirm 0:32 1:45", "/confirm@botname 0:32"
+                raw = text[len("/confirm"):].lstrip("@")
+                if raw and not raw[0].isspace():
+                    parts = raw.split()
+                    raw = " ".join(parts[1:]) if len(parts) > 1 else ""
+                confirm_args = raw.strip()
+                _handle_ranker_confirm(token, chat_id, confirm_args)
+
+            elif text.startswith("/aishorts"):
+                aishorts_lock = _PROJECT_ROOT / "data" / "aishorts.lock"
+                if _is_process_running(aishorts_lock):
+                    _send(token, chat_id, "⚙️ AI Shorts già in esecuzione.")
+                else:
+                    _send(token, chat_id, "🎬 Genero script &amp; voce AI Shorts... apri la web UI per i prompt.")
                     try:
                         subprocess.Popen(
-                            _RANKER_CMD,
+                            _PIPELINE_CMD + ["--aishorts"],
                             creationflags=subprocess.CREATE_NEW_CONSOLE,
                         )
                     except Exception as exc:
-                        _send(token, chat_id, f"❌ Failed to start ranker: {exc}")
+                        _send(token, chat_id, f"❌ Errore avvio AI Shorts: {exc}")
+
+            elif text.startswith("/assemble"):
+                # handles "/assemble RUN_ID", "/assemble@botname RUN_ID"
+                raw = text[len("/assemble"):].lstrip("@")
+                if raw and not raw[0].isspace():
+                    parts = raw.split()
+                    raw = " ".join(parts[1:]) if len(parts) > 1 else ""
+                _handle_aishorts_assemble(token, chat_id, raw.strip())
 
             elif text.startswith("/"):
-                _send(token, chat_id, "Commands: /run · /status · /next · /analyze · /ranker")
+                _send(token, chat_id,
+                      "Comandi: /run · /status · /next · /analyze\n"
+                      "/ranker · /pick &lt;lettera&gt; · /confirm [timestamp]\n"
+                      "/aishorts · /assemble &lt;RUN_ID&gt;")
 
 
 def main() -> None:

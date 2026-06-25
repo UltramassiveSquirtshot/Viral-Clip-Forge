@@ -30,13 +30,14 @@ def _default_font() -> str:
 class RankerConfig:
     app: AppConfig
     top_n: int = 5
-    clip_seconds: float = 6.0          # per-rank segment length → ~30s total
+    clip_seconds: float = 6.0          # preferred segment length (used as fallback when no SRT)
+    min_clip_seconds: float = 4.0      # shortest allowed clip when using subtitle-aware end detection
+    max_clip_seconds: float = 15.0     # longest allowed clip (natural boundary capped here)
     width: int = 1080
     height: int = 1920
     font_path: str = field(default_factory=_default_font)
     drive_scripts_folder: str = "ViralClipForge"
     drive_scripts_name: str = "ranker_scripts.json"
-    youtube_category_id: str = "24"     # Entertainment
 
     @property
     def download_dir(self) -> Path:
@@ -61,6 +62,14 @@ class RankerConfig:
     @property
     def gdrive_client_secret_path(self) -> Path:
         return self.app.ranker_client_secret_path
+
+    @property
+    def pending_path(self) -> Path:
+        return self.app.state_db_path.parent / "ranker_pending.json"
+
+    @property
+    def pool_path(self) -> Path:
+        return self.app.state_db_path.parent / "ranker_pool.json"
 
 
 def build_ranker_config(app: AppConfig) -> RankerConfig:

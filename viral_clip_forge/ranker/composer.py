@@ -59,37 +59,70 @@ def _ff_path(p: str) -> str:
     return s
 
 
+def _has_audio(path: Path) -> bool:
+    """Return True if the file has at least one audio stream."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=index", "-of", "compact", str(path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return bool(result.stdout.strip())
+
+
+def _clip_duration(cfg: RankerConfig, src: Path) -> float:
+    """Return actual duration of src via ffprobe; fall back to cfg.clip_seconds."""
+    try:
+        r = subprocess.run(
+            [str(cfg.app.ffprobe_bin),
+             "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
+        )
+        val = r.stdout.decode().strip()
+        dur = float(val) if val else 0.0
+        return dur if dur > 0 else cfg.clip_seconds
+    except Exception:
+        return cfg.clip_seconds
+
+
 def _normalize_clip(cfg: RankerConfig, src: Path, dest: Path) -> bool:
+    duration = _clip_duration(cfg, src)
     vf = (
         f"scale={cfg.width}:{cfg.height}:force_original_aspect_ratio=increase,"
         f"crop={cfg.width}:{cfg.height},fps=30,setsar=1"
     )
+    # Always use explicit anullsrc so the output is guaranteed to have an audio
+    # stream even when the source clip has none. Pexels portrait clips often ship
+    # without audio; -apad alone exits 0 but produces a video-only file.
     cmd = [
         str(cfg.ffmpeg_bin),
         "-i", str(src),
-        "-t", f"{cfg.clip_seconds:.3f}",
-        "-vf", vf,
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-t", f"{duration:.3f}",
+        "-filter_complex",
+        f"[0:v:0]{vf}[vout]",
+        "-map", "[vout]", "-map", "1:a:0",
         "-c:v", "libx264", "-profile:v", "main", "-crf", "20", "-preset", "fast",
         "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
-        # If a source has no audio, synthesize silence so concat has a uniform stream.
-        "-af", "apad",
-        "-shortest",
         "-movflags", "+faststart",
         "-y", str(dest),
     ]
     stderr, rc = _run_ffmpeg(cmd)
-    if rc != 0 or not dest.exists():
-        # Retry adding an explicit silent audio source for clips with no audio track.
+    if rc != 0 or not dest.exists() or not _has_audio(dest):
+        # Fallback: source may have its own audio — mix it with silence to guarantee
+        # presence, then let amix produce the output audio stream.
+        dest.unlink(missing_ok=True)
         cmd2 = [
             str(cfg.ffmpeg_bin),
             "-i", str(src),
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-t", f"{cfg.clip_seconds:.3f}",
-            "-vf", vf,
-            "-map", "0:v:0", "-map", "1:a:0",
+            "-t", f"{duration:.3f}",
+            "-filter_complex",
+            f"[0:v:0]{vf}[vout];[1:a:0]anull[aout]",
+            "-map", "[vout]", "-map", "[aout]",
             "-c:v", "libx264", "-profile:v", "main", "-crf", "20", "-preset", "fast",
             "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
-            "-shortest", "-movflags", "+faststart",
+            "-movflags", "+faststart",
             "-y", str(dest),
         ]
         stderr, rc = _run_ffmpeg(cmd2)
@@ -99,46 +132,65 @@ def _normalize_clip(cfg: RankerConfig, src: Path, dest: Path) -> bool:
     return True
 
 
-def _build_drawtext_filters(cfg: RankerConfig, title: str, labels: list[str], n: int) -> str:
-    """Return the chain of drawtext filters (applied to the concatenated video)."""
+def _build_drawtext_subgraph(cfg: RankerConfig, title: str, labels: list[str], n: int,
+                             in_pad: str, out_pad: str,
+                             segment_durations: list[float] | None = None) -> str:
+    """Return a filter_complex subgraph that chains all drawtext filters.
+
+    Each filter gets its own intermediate pad label so FFmpeg's filter_complex
+    parser can resolve the graph correctly. Comma-chaining only works in -vf,
+    not inside filter_complex where explicit labels are required.
+
+    segment_durations: actual duration of each clip (seconds). Falls back to
+    cfg.clip_seconds for any missing entry.
+    """
     font = _ff_path(cfg.font_path)
-    seg = cfg.clip_seconds
     W = cfg.width
 
-    filters = []
-
-    # Persistent title banner near the top. Auto-size so long titles fit the width:
-    # estimate ~0.58*fontsize per glyph (Arial Bold avg), leave ~8% side margin.
+    # Persistent title banner near the top. Auto-size so long titles fit the width.
     margin = 0.92
     max_text_w = W * margin
     glyph_ratio = 0.58
     n_chars = max(1, len(title))
     fit_fs = int(max_text_w / (n_chars * glyph_ratio))
     title_fs = max(34, min(int(W * 0.075), fit_fs))
-    filters.append(
+
+    # Timed rank labels, list-style down the left. Countdown: #5 first … #1 last.
+    label_fs = max(40, int(W * 0.055))
+    line_h = int(label_fs * 1.6)
+    list_top = int(cfg.height * 0.30)
+
+    all_filters: list[str] = []
+    # title drawtext
+    all_filters.append(
         f"drawtext=fontfile='{font}':text='{_escape_drawtext(title)}':"
         f"fontsize={title_fs}:fontcolor=white:borderw=4:bordercolor=black:"
         f"box=1:boxcolor=black@0.5:boxborderw=20:"
         f"x=(w-text_w)/2:y=120"
     )
-
-    # Timed rank labels, list-style down the left. Countdown order: #5 first … #1 last.
-    label_fs = max(40, int(W * 0.055))
-    line_h = int(label_fs * 1.6)
-    list_top = int(cfg.height * 0.30)
+    # rank label drawtexts
+    durations = segment_durations or []
     for i, label in enumerate(labels[:n]):
-        rank = n - i  # first segment is the highest number (#5), last is #1
-        start = i * seg
-        end = (i + 1) * seg
+        rank = n - i
+        seg_i = durations[i] if i < len(durations) else cfg.clip_seconds
+        start = sum(durations[j] if j < len(durations) else cfg.clip_seconds for j in range(i))
+        end = start + seg_i
         y = list_top + i * line_h
         text = f"#{rank}  {label}"
-        filters.append(
+        all_filters.append(
             f"drawtext=fontfile='{font}':text='{_escape_drawtext(text)}':"
             f"fontsize={label_fs}:fontcolor=yellow:borderw=4:bordercolor=black:"
             f"x=60:y={y}:enable='between(t\\,{start:.2f}\\,{end:.2f})'"
         )
 
-    return ",".join(filters)
+    # Wire them up with explicit pad labels between each stage.
+    parts: list[str] = []
+    cur_in = in_pad
+    for idx, filt in enumerate(all_filters):
+        cur_out = out_pad if idx == len(all_filters) - 1 else f"[dt{idx}]"
+        parts.append(f"{cur_in}{filt}{cur_out}")
+        cur_in = cur_out
+    return ";".join(parts)
 
 
 def compose(
@@ -166,8 +218,9 @@ def compose(
         return RankerResult(None, title, labels, 0, False, "all clips failed to normalize")
 
     n = len(norm_paths)
+    norm_durations = [_clip_duration(cfg, p) for p in norm_paths]
 
-    # Stage 2: concat + overlays (+ music).
+    # Stage 2: concat + optional overlays (+ music).
     out_name = f"ranking_{datetime.now().strftime('%Y%m%d-%H%M%S')}.mp4"
     out_path = cfg.output_dir / out_name
 
@@ -179,12 +232,20 @@ def compose(
 
     # concat filter over the video+audio of each normalized input
     concat_inputs = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(n))
-    drawtext_chain = _build_drawtext_filters(cfg, title, labels, n)
 
-    filtergraph = (
-        f"{concat_inputs}concat=n={n}:v=1:a=1[cv][ca];"
-        f"[cv]{drawtext_chain}[vout]"
-    )
+    # Skip drawtext when no labels/title provided (e.g. ranker v3 flow — user adds text in CapCut)
+    if labels and title:
+        drawtext_subgraph = _build_drawtext_subgraph(
+            cfg, title, labels, n, "[cv]", "[vout]", segment_durations=norm_durations
+        )
+        filtergraph = (
+            f"{concat_inputs}concat=n={n}:v=1:a=1[cv][ca];"
+            f"{drawtext_subgraph}"
+        )
+        video_map = "[vout]"
+    else:
+        filtergraph = f"{concat_inputs}concat=n={n}:v=1:a=1[cv][ca]"
+        video_map = "[cv]"
 
     if music:
         music_idx = n  # music is the last input
@@ -199,7 +260,7 @@ def compose(
 
     cmd += [
         "-filter_complex", filtergraph,
-        "-map", "[vout]", "-map", audio_map,
+        "-map", video_map, "-map", audio_map,
         "-c:v", "libx264", "-profile:v", "main", "-crf", "20", "-preset", "fast",
         "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
         "-movflags", "+faststart",

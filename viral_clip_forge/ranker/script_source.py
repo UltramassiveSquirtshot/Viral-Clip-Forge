@@ -54,8 +54,12 @@ def _valid_entry(entry: dict, top_n: int) -> bool:
     return True
 
 
-def load_next_script(cfg: RankerConfig) -> RankingScript | None:
-    """Pop the first valid script from the Drive queue file and persist the removal."""
+def load_next_script(cfg: RankerConfig) -> tuple[RankingScript | None, int]:
+    """Pop the first valid script from the Drive queue file and persist the removal.
+
+    Returns (script, remaining_count). script is None when the queue is empty or
+    the file is missing; remaining_count is 0 in those cases.
+    """
     service = gdrive.get_service(cfg.gdrive_token_path, cfg.gdrive_client_secret_path)
 
     file_id = gdrive.find_file(service, cfg.drive_scripts_name, cfg.drive_scripts_folder)
@@ -67,19 +71,19 @@ def load_next_script(cfg: RankerConfig) -> RankingScript | None:
             "[ranker] %s not found on Drive (folder '%s'). Upload one to queue a video.",
             cfg.drive_scripts_name, cfg.drive_scripts_folder,
         )
-        return None
+        return None, 0
 
     try:
         raw = gdrive.download_text(service, file_id)
         data = json.loads(raw)
     except Exception as exc:
         log.error("[ranker] Could not read/parse %s: %s", cfg.drive_scripts_name, exc)
-        return None
+        return None, 0
 
     videos = data.get("videos") if isinstance(data, dict) else None
     if not isinstance(videos, list) or not videos:
         log.info("[ranker] No scripts queued in %s.", cfg.drive_scripts_name)
-        return None
+        return None, 0
 
     chosen = None
     chosen_idx = None
@@ -92,7 +96,7 @@ def load_next_script(cfg: RankerConfig) -> RankingScript | None:
 
     if chosen is None:
         log.warning("[ranker] No valid script entries in %s.", cfg.drive_scripts_name)
-        return None
+        return None, 0
 
     # Remove the consumed entry and rewrite the file on Drive (queue behaviour).
     remaining = [e for i, e in enumerate(videos) if i != chosen_idx]
@@ -109,4 +113,4 @@ def load_next_script(cfg: RankerConfig) -> RankingScript | None:
         title=chosen["title"].strip(),
         labels=[s.strip() for s in chosen["labels"]],
         search_queries=[s.strip() for s in chosen["search_queries"]],
-    )
+    ), len(remaining)

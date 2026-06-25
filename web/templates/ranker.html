@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}Ranker — Viral Clip Forge{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-5">
+  <h1 class="text-xl font-bold text-white">Ranker Wizard</h1>
+  {% if ranker.pending %}
+  <button class="btn btn-red text-xs" onclick="doReset()">✕ Annulla sessione</button>
+  {% endif %}
+</div>
+
+<!-- Step indicator -->
+<div class="flex items-center gap-2 mb-6">
+  {% set cur = ranker.step %}
+  {% for dot_step, dot_label in [('pending_theme','1. Scegli tema'), ('pending_pick','2. Scegli video'), ('pending_confirm','3. Conferma')] %}
+  <div class="flex items-center gap-2">
+    <div class="step-dot {% if cur == dot_step %}step-active{% elif cur and loop.index < loop.revindex %}step-done{% else %}step-idle{% endif %}">
+      {{ loop.index }}
+    </div>
+    <span class="text-xs {% if cur == dot_step %}text-white font-semibold{% else %}text-slate-500{% endif %}">{{ dot_label }}</span>
+  </div>
+  {% if not loop.last %}<div class="h-px flex-1 bg-slate-700"></div>{% endif %}
+  {% endfor %}
+</div>
+
+<!-- Step 0: no session -->
+{% if not ranker.pending %}
+<div class="card max-w-lg">
+  <h2 class="font-semibold text-white mb-2">Nessuna sessione attiva</h2>
+  <p class="text-sm text-slate-400 mb-4">
+    Avvia il wizard per creare un nuovo Ranking Short.<br>
+    Il ranker cerca 5 video CC-BY su YouTube, ti fa scegliere il momento migliore
+    e compone il video finale pronto per CapCut.
+  </p>
+
+  <!-- Custom query shortcut -->
+  <div class="mb-4">
+    <label class="text-xs text-slate-400 mb-1 block">Ricerca diretta (opzionale)</label>
+    <div class="flex gap-2">
+      <input id="custom-query-start" type="text"
+        placeholder="es. lucky escape compilation CC BY"
+        class="flex-1 bg-slate-900 border border-slate-600 rounded-md px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500">
+      <button id="btn-search" class="btn btn-blue whitespace-nowrap" onclick="doStartWithQuery(this)">🔍 Cerca CC-BY</button>
+    </div>
+    <p class="text-xs text-slate-600 mt-1">Salta la selezione del tema e cerca direttamente su YouTube.</p>
+  </div>
+
+  <div class="flex items-center gap-3 mb-4">
+    <div class="h-px flex-1 bg-slate-700"></div>
+    <span class="text-xs text-slate-600">oppure</span>
+    <div class="h-px flex-1 bg-slate-700"></div>
+  </div>
+
+  <button id="btn-start" class="btn btn-green w-full" onclick="doStart(this)">🎬 Scegli tema predefinito</button>
+</div>
+
+<!-- Step 1: pending_theme — scegli tema -->
+{% elif ranker.step == 'pending_theme' %}
+<div class="card">
+  <h2 class="font-semibold text-white mb-1">Step 1 — Scegli l'argomento</h2>
+  <p class="text-sm text-slate-400 mb-4">Seleziona un tema oppure cerca direttamente con una query personalizzata.</p>
+
+  <!-- Custom query shortcut (also in step 1 so user can change their mind) -->
+  <div class="mb-4">
+    <label class="text-xs text-slate-400 mb-1 block">Ricerca personalizzata</label>
+    <div class="flex gap-2">
+      <input id="custom-query-theme" type="text"
+        placeholder="es. shark attack compilation"
+        class="flex-1 bg-slate-900 border border-slate-600 rounded-md px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500"
+        onkeydown="if(event.key==='Enter') doCustomSearch(document.getElementById('btn-custom-search'))">
+      <button id="btn-custom-search" class="btn btn-blue whitespace-nowrap" onclick="doCustomSearch(this)">🔍 Cerca</button>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3 mb-4">
+    <div class="h-px flex-1 bg-slate-700"></div>
+    <span class="text-xs text-slate-600">oppure scegli tema</span>
+    <div class="h-px flex-1 bg-slate-700"></div>
+  </div>
+
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" id="theme-grid">
+    {% for letter, name in themes %}
+    <div class="theme-card" data-letter="{{ letter }}" onclick="selectTheme(this)">
+      <span class="text-slate-400 text-xs font-bold mr-2">{{ letter.upper() }}</span>
+      <span class="text-white text-sm">{{ name }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="mt-4">
+    <button id="btn-pick-theme" class="btn btn-blue" disabled onclick="doPickTheme(this)">Cerca video →</button>
+  </div>
+</div>
+
+<!-- Step 2: pending_pick — scegli video -->
+{% elif ranker.step == 'pending_pick' %}
+<div class="card">
+  <h2 class="font-semibold text-white mb-1">Step 2 — Scegli il video</h2>
+  <p class="text-sm text-slate-400 mb-1">Tema: <span class="text-white font-semibold">{{ ranker.pending.theme }}</span></p>
+  <p class="text-sm text-slate-400 mb-4">Seleziona il video da usare. Il ranker lo scaricherà e analizzerà i momenti migliori.</p>
+  <div class="flex flex-col gap-3" id="video-grid">
+    {% for c in ranker.pending.candidates %}
+    {% set i = loop.index0 %}
+    {% set letter = 'abcde'[i] %}
+    <div class="video-card" data-letter="{{ letter }}" onclick="selectVideo(this)">
+      <div class="flex items-start gap-3">
+        <span class="text-slate-400 font-bold text-sm mt-0.5 w-4 flex-shrink-0">{{ letter.upper() }}</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-white text-sm font-medium truncate">{{ c.title[:70] }}</div>
+          <div class="text-slate-400 text-xs mt-0.5">
+            {{ "{:,.0f}".format(c.views) }} views
+            {% if c.duration_sec %} · {{ (c.duration_sec // 60)|int }}:{{ "%02d"|format(c.duration_sec % 60) }}{% endif %}
+            &nbsp;·&nbsp;
+            <a href="https://youtu.be/{{ c.id }}" target="_blank" class="text-blue-400 hover:underline">youtu.be/{{ c.id }}</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="mt-4">
+    <button id="btn-pick-video" class="btn btn-blue" disabled onclick="doPickVideo(this)">Analizza video →</button>
+  </div>
+</div>
+
+<!-- Step 3: pending_confirm — conferma timestamp -->
+{% elif ranker.step == 'pending_confirm' %}
+<div class="card">
+  <h2 class="font-semibold text-white mb-1">Step 3 — Conferma i segmenti</h2>
+  <p class="text-sm text-slate-400 mb-1">Video: <span class="text-white font-semibold">{{ ranker.pending.video_title[:60] }}</span></p>
+  <p class="text-xs text-slate-400 mb-4">
+    <a href="https://youtu.be/{{ ranker.pending.video_id }}" target="_blank" class="text-blue-400 hover:underline">youtu.be/{{ ranker.pending.video_id }}</a>
+  </p>
+
+  <p class="text-sm text-slate-300 mb-2">Segmenti suggeriti (clicca per vedere su YouTube):</p>
+  <ul class="mb-4 space-y-1">
+    {% for seg in ranker.pending.suggested_segments %}
+    {% set start = seg[0]|int %}
+    {% set end = seg[1]|int %}
+    {% set sm = start // 60 %}{% set ss = start % 60 %}
+    {% set em = end // 60 %}{% set es = end % 60 %}
+    <li class="text-sm">
+      <a href="https://youtu.be/{{ ranker.pending.video_id }}?t={{ start }}" target="_blank" class="text-blue-400 hover:underline">
+        {{ sm }}:{{ "%02d"|format(ss) }}–{{ em }}:{{ "%02d"|format(es) }}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <div class="mb-4">
+    <label class="text-xs text-slate-400 mb-1 block">Segmenti personalizzati <span class="text-slate-600">(lascia vuoto per usare i suggeriti)</span></label>
+    <input id="custom-ts" type="text" placeholder="es. 0:32-0:48 1:27-1:45 3:10-3:25"
+      class="w-full bg-slate-900 border border-slate-600 rounded-md px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500">
+  </div>
+
+  <div class="flex gap-3">
+    <button id="btn-confirm" class="btn btn-green" onclick="doConfirm(this)">✂ Taglia e Componi</button>
+  </div>
+</div>
+{% endif %}
+
+<!-- Pool browser -->
+<div class="card mt-6">
+  <div class="flex items-center gap-3 mb-3">
+    <h2 class="font-semibold text-white">Pool candidati</h2>
+    <input id="pool-theme" type="text" placeholder="filtra tema..." class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-blue-500" style="width:160px">
+    <button class="btn btn-gray text-xs px-2 py-1" onclick="loadPool()">Cerca</button>
+  </div>
+  <div id="pool-content" class="text-xs text-slate-500">Premi Cerca per vedere i candidati salvati.</div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ---- Theme selection ----
+  let selectedTheme = null;
+  function selectTheme(el) {
+    document.querySelectorAll('.theme-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedTheme = el.dataset.letter;
+    document.getElementById('btn-pick-theme').disabled = false;
+  }
+
+  // ---- Video selection ----
+  let selectedVideo = null;
+  function selectVideo(el) {
+    document.querySelectorAll('.video-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedVideo = el.dataset.letter;
+    document.getElementById('btn-pick-video').disabled = false;
+  }
+
+  // ---- Actions ----
+  function doStart(btn) {
+    runAction('/api/ranker/start', {}, btn, () => location.reload());
+  }
+
+  function doStartWithQuery(btn) {
+    const q = document.getElementById('custom-query-start').value.trim();
+    if (!q) { alert('Inserisci una query di ricerca.'); return; }
+    runAction('/api/ranker/start', {query: q}, btn, () => pollStep(null));
+  }
+
+  function doCustomSearch(btn) {
+    const q = document.getElementById('custom-query-theme').value.trim();
+    if (!q) { alert('Inserisci una query di ricerca.'); return; }
+    // Reset current pending and start fresh with custom query
+    fetch('/api/ranker/reset', {method: 'POST'}).then(() => {
+      runAction('/api/ranker/start', {query: q}, btn, () => pollStep(null));
+    });
+  }
+
+  function doPickTheme(btn) {
+    if (!selectedTheme) return;
+    runAction('/api/ranker/pick', {letter: selectedTheme}, btn, () => {
+      // Poll until step changes from pending_theme
+      pollStep('pending_theme');
+    });
+  }
+
+  function doPickVideo(btn) {
+    if (!selectedVideo) return;
+    runAction('/api/ranker/pick', {letter: selectedVideo}, btn, () => {
+      pollStep('pending_pick');
+    });
+  }
+
+  function doConfirm(btn) {
+    const ts = document.getElementById('custom-ts').value.trim();
+    runAction('/api/ranker/confirm', {timestamps: ts}, btn, () => {
+      pollStep('pending_confirm');
+    });
+  }
+
+  function doReset() {
+    if (!confirm('Annullare la sessione ranker in corso?')) return;
+    fetch('/api/ranker/reset', {method: 'POST'})
+      .then(() => location.reload());
+  }
+
+  // Poll /api/ranker/pending until step changes, then reload.
+  // currentStep=null means "wait until any pending session exists".
+  function pollStep(currentStep) {
+    const iv = setInterval(async () => {
+      const res = await fetch('/api/ranker/pending');
+      const data = await res.json();
+      const newStep = data ? data.step : null;
+      const changed = currentStep === null ? newStep !== null : newStep !== currentStep;
+      if (changed) {
+        clearInterval(iv);
+        location.reload();
+      }
+    }, 2000);
+  }
+
+  // ---- Pool browser ----
+  async function loadPool() {
+    const theme = document.getElementById('pool-theme').value.trim();
+    const url = '/api/pool' + (theme ? '?theme=' + encodeURIComponent(theme) : '');
+    const res = await fetch(url);
+    const pool = await res.json();
+    const div = document.getElementById('pool-content');
+    const keys = Object.keys(pool);
+    if (!keys.length) {
+      div.textContent = 'Pool vuoto per il tema cercato.';
+      return;
+    }
+    let html = '';
+    for (const theme of keys) {
+      const vids = pool[theme];
+      html += `<div class="mb-3"><div class="text-slate-300 font-semibold mb-1">${theme} (${vids.length})</div>`;
+      for (const v of vids.slice(0, 10)) {
+        html += `<div class="text-slate-400 ml-2">· <a href="https://youtu.be/${v.id}" target="_blank" class="text-blue-400 hover:underline">${(v.title||v.id).slice(0,60)}</a>`;
+        if (v.views) html += ` — ${(v.views/1000).toFixed(0)}K views`;
+        html += `</div>`;
+      }
+      if (vids.length > 10) html += `<div class="text-slate-600 ml-2">... e altri ${vids.length - 10}</div>`;
+      html += '</div>';
+    }
+    div.innerHTML = html;
+  }
+</script>
+{% endblock %}

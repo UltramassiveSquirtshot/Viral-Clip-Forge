@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}AI Shorts · Viral Clip Forge{% endblock %}
+
+{% block content %}
+<div class="mb-5 flex items-center gap-3">
+  <h1 class="text-xl font-bold text-white">🤖 AI Shorts</h1>
+  {% if aishorts.running %}
+    <span class="badge badge-blue">in esecuzione…</span>
+  {% endif %}
+</div>
+
+{% set pending = aishorts.pending %}
+{% set step = aishorts.step %}
+
+<!-- Step indicator -->
+<div class="flex items-center gap-3 mb-6 text-sm">
+  <div class="step-dot {{ 'step-done' if step else 'step-active' }}">1</div>
+  <span class="{{ 'text-slate-200' if not step else 'text-slate-500' }}">Genera script &amp; voce</span>
+  <div class="flex-1 border-t border-slate-700"></div>
+  <div class="step-dot {{ 'step-active' if step == 'pending_images' else 'step-idle' }}">2</div>
+  <span class="{{ 'text-slate-200' if step == 'pending_images' else 'text-slate-500' }}">Genera immagini su Leonardo</span>
+  <div class="flex-1 border-t border-slate-700"></div>
+  <div class="step-dot step-idle">3</div>
+  <span class="text-slate-500">Assembla</span>
+</div>
+
+{% if not pending %}
+  <!-- Step 0: nothing pending -->
+  <div class="card">
+    <p class="text-slate-300 mb-1">Nessuna sessione in corso.</p>
+    <p class="text-slate-500 text-sm mb-4">
+      Consuma il prossimo script dalla coda Drive (<code>ai_shorts_scripts.json</code>),
+      genera la voce con edge-TTS e ottieni i prompt Leonardo con i timestamp suggeriti.
+    </p>
+    <button class="btn btn-green" onclick="doStart(this)">▶ Genera prossimo script &amp; voce</button>
+  </div>
+
+{% elif step == 'pending_images' %}
+  <!-- Step 2: images pending -->
+  <div class="card mb-5">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <div class="text-lg font-bold text-white mb-1">{{ pending.title }}</div>
+        <div class="text-sm text-slate-400">
+          🖼 {{ pending.scenes|length }} scene · ⏱ ~{{ '%.0f'|format(pending.total_seconds or 0) }}s
+          · <span class="text-slate-500">RUN_ID</span> <code>{{ pending.run_id }}</code>
+        </div>
+        {% if pending.hook %}<div class="text-sm text-slate-300 mt-2 italic">“{{ pending.hook }}”</div>{% endif %}
+      </div>
+      <a href="{{ pending.drive_folder_url }}" target="_blank" class="btn btn-blue whitespace-nowrap">📁 Cartella Drive</a>
+    </div>
+    <p class="text-xs text-slate-500 mt-3">
+      Genera ogni immagine su Leonardo.ai e caricala nella cartella Drive
+      <b>nominata col timestamp suggerito</b> (es. <code>{{ pending.scenes[0].suggested_filename if pending.scenes }}</code>).
+      Puoi aggiungere immagini extra a timestamp intermedi.
+    </p>
+  </div>
+
+  <div class="grid gap-3 mb-5">
+    {% for scene in pending.scenes %}
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <span class="badge badge-blue">scena {{ scene.index + 1 }} · {{ '%.1f'|format(scene.timestamp) }}s</span>
+        <button class="btn btn-gray text-xs"
+                onclick="copyText('{{ scene.suggested_filename }}', this)">
+          📋 nome file: {{ scene.suggested_filename }}
+        </button>
+      </div>
+      <div class="text-xs text-slate-500 mb-1">Narrazione</div>
+      <div class="text-sm text-slate-300 mb-3">{{ scene.narration }}</div>
+      <div class="text-xs text-slate-500 mb-1">Prompt Leonardo</div>
+      <textarea readonly rows="2"
+                class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm text-slate-200"
+                id="prompt-{{ scene.index }}">{{ scene.leonardo_prompt }}</textarea>
+      <button class="btn btn-gray text-xs mt-2"
+              onclick="copyFromEl('prompt-{{ scene.index }}', this)">📋 Copia prompt</button>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="card flex items-center gap-3">
+    <button id="btn-assemble" class="btn btn-green" disabled
+            onclick="doAssemble(this)">🎬 Assembla</button>
+    <span id="img-count" class="text-sm text-slate-400">Controllo immagini su Drive…</span>
+    <button class="btn btn-red ml-auto" onclick="doReset()">✕ Annulla sessione</button>
+  </div>
+
+{% else %}
+  <div class="card">
+    <p class="text-slate-300">Sessione in stato <code>{{ step }}</code>.</p>
+    <button class="btn btn-red mt-3" onclick="doReset()">✕ Reset sessione</button>
+  </div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const PENDING = {{ (pending or none) | tojson }};
+
+  function doStart(btn) {
+    runAction('/api/ai-shorts/start', {}, btn, () => pollStep(null));
+  }
+
+  function doAssemble(btn) {
+    if (!PENDING) return;
+    runAction('/api/ai-shorts/assemble', {run_id: PENDING.run_id}, btn, () => pollStep('pending_images'));
+  }
+
+  function doReset() {
+    if (!confirm('Annullare la sessione AI Shorts in corso?')) return;
+    fetch('/api/ai-shorts/reset', {method: 'POST'}).then(() => location.reload());
+  }
+
+  // Copy helpers
+  function copyText(text, btn) {
+    navigator.clipboard.writeText(text).then(() => flash(btn));
+  }
+  function copyFromEl(id, btn) {
+    const el = document.getElementById(id);
+    navigator.clipboard.writeText(el.value).then(() => flash(btn));
+  }
+  function flash(btn) {
+    const old = btn.textContent;
+    btn.textContent = '✓ copiato';
+    setTimeout(() => { btn.textContent = old; }, 1200);
+  }
+
+  // Poll /api/ai-shorts/pending until step changes, then reload.
+  function pollStep(currentStep) {
+    const iv = setInterval(async () => {
+      const res = await fetch('/api/ai-shorts/pending');
+      const data = await res.json();
+      const newStep = data ? data.step : null;
+      const changed = currentStep === null ? newStep !== null : newStep !== currentStep;
+      if (changed) { clearInterval(iv); location.reload(); }
+    }, 2000);
+  }
+
+  // While waiting for images, poll Drive image count to enable the Assemble button.
+  {% if step == 'pending_images' %}
+  async function refreshImageCount() {
+    try {
+      const res = await fetch('/api/ai-shorts/images');
+      const data = await res.json();
+      const n = data.count || 0;
+      const label = document.getElementById('img-count');
+      const btn = document.getElementById('btn-assemble');
+      if (n > 0) {
+        label.textContent = n + ' immagine/i trovate su Drive';
+        btn.disabled = false;
+      } else {
+        label.textContent = 'Nessuna immagine ancora caricata su Drive';
+        btn.disabled = true;
+      }
+    } catch (e) { /* ignore transient errors */ }
+  }
+  refreshImageCount();
+  setInterval(refreshImageCount, 5000);
+  {% endif %}
+</script>
+{% endblock %}

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Viral Clip Forge{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-bold mb-5 text-white">Dashboard</h1>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+  <!-- Pipeline status -->
+  <div class="card">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold text-white">CC-BY Pipeline</h2>
+      {% if status.running %}
+        <span class="badge badge-blue">⚙ In esecuzione</span>
+      {% elif status.status == 'completed' %}
+        <span class="badge badge-ok">✓ Completato</span>
+      {% elif status.status == 'partial' %}
+        <span class="badge badge-warn">~ Parziale</span>
+      {% elif status.status == 'no_runs' %}
+        <span class="badge badge-gray" style="background:#1e293b;color:#64748b">Nessun run</span>
+      {% else %}
+        <span class="badge badge-err">✗ {{ status.status }}</span>
+      {% endif %}
+    </div>
+    {% if status.last_run_date %}
+    <div class="text-xs text-slate-400 mb-3">
+      Ultimo run: <span class="text-slate-200">{{ status.last_run_date }}</span>
+      &nbsp;·&nbsp; Clip prodotti: <span class="text-slate-200">{{ status.clips_produced }}</span>
+      &nbsp;·&nbsp; Upload YT: <span class="text-slate-200">{{ status.uploads_scheduled }}</span>
+    </div>
+    {% endif %}
+    <button id="btn-run" class="btn btn-green" onclick="doRun(this)">▶ Avvia Pipeline</button>
+  </div>
+
+  <!-- Analytics -->
+  <div class="card">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold text-white">Analytics</h2>
+      {% if analytics.running %}
+        <span class="badge badge-blue">⚙ In esecuzione</span>
+      {% elif analytics.last_report_date %}
+        <span class="badge badge-ok">✓ {{ analytics.last_report_date }}</span>
+      {% else %}
+        <span class="badge badge-gray" style="background:#1e293b;color:#64748b">Mai eseguito</span>
+      {% endif %}
+    </div>
+    <div class="text-xs text-slate-400 mb-3">
+      Genera report su Drive con dati YouTube Analytics degli ultimi 14 giorni.
+    </div>
+    <button id="btn-analyze" class="btn btn-blue" onclick="doAnalyze(this)">📊 Avvia Analytics</button>
+  </div>
+
+  <!-- Next publish slots -->
+  <div class="card md:col-span-2">
+    <h2 class="font-semibold text-white mb-3">Prossimi slot YouTube schedulati</h2>
+    {% if next_slots %}
+    <table>
+      <thead>
+        <tr><th>Data/ora</th><th>Titolo clip</th></tr>
+      </thead>
+      <tbody>
+        {% for s in next_slots %}
+        <tr>
+          <td class="text-slate-300 whitespace-nowrap">{{ s.publish_at }}</td>
+          <td class="text-slate-400">{{ s.title }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-slate-500 text-sm">Nessun upload schedulato.</p>
+    {% endif %}
+  </div>
+
+  <!-- Recent runs -->
+  <div class="card md:col-span-2">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold text-white">Run recenti</h2>
+      <button class="btn btn-gray text-xs px-2 py-1" onclick="location.reload()">↺ Aggiorna</button>
+    </div>
+    {% if recent_runs %}
+    <table>
+      <thead>
+        <tr><th>Data</th><th>Status</th><th>Clip</th><th>Upload YT</th><th>API units</th></tr>
+      </thead>
+      <tbody>
+        {% for r in recent_runs %}
+        <tr>
+          <td class="text-slate-300 whitespace-nowrap">{{ r.run_date }}</td>
+          <td>
+            {% if r.status == 'completed' %}
+              <span class="badge badge-ok">{{ r.status }}</span>
+            {% elif r.status == 'partial' %}
+              <span class="badge badge-warn">{{ r.status }}</span>
+            {% else %}
+              <span class="badge badge-err">{{ r.status }}</span>
+            {% endif %}
+          </td>
+          <td class="text-slate-300">{{ r.clips_produced }}</td>
+          <td class="text-slate-300">{{ r.uploads_scheduled }}</td>
+          <td class="text-slate-400">{{ r.api_units_used }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-slate-500 text-sm">Nessun run trovato.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function doRun(btn) {
+    if (!confirm('Avviare la pipeline CC-BY?')) return;
+    runAction('/api/run', {}, btn, () => location.reload());
+  }
+  function doAnalyze(btn) {
+    if (!confirm('Avviare il run analytics?')) return;
+    runAction('/api/analyze', {}, btn, () => location.reload());
+  }
+</script>
+{% endblock %}
